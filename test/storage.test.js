@@ -114,6 +114,33 @@ test('restart recovers completed uploads without downloading them again', async 
   assert.equal((await f.store.commit(p.id)).assets.length, 2)
 })
 
+test('durable upload flush opens a writable non-truncating handle (Windows compatible)', async (t) => {
+  const f = await fixture(t)
+  const p = await f.store.begin(input())
+  const open = fs.open
+  let flushed = false
+  fs.open = async (file, flags, ...rest) => {
+    if (String(file).endsWith('.part')) {
+      assert.equal(flags, 'r+')
+      flushed = true
+    }
+    return open(file, flags, ...rest)
+  }
+  try {
+    await f.store.upload(p.id, 'part-0', Readable.from([bytes]))
+  } finally {
+    fs.open = open
+  }
+  assert.equal(flushed, true)
+  const record = await f.store.commit(p.id)
+  const opened = await f.store.openAsset(record.id, record.version, 'part-0')
+  try {
+    assert.deepEqual(await opened.handle.readFile(), bytes)
+  } finally {
+    await opened.release()
+  }
+})
+
 test('unknown-size streams report live progress, survive restart and require explicit commit', async (t) => {
   const f = await fixture(t)
   const declaration = input([bytes, Buffer.from('later')])

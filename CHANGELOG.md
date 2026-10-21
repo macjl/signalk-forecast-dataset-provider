@@ -7,6 +7,7 @@
 - Include trusted index enrichment, filtered discovery, version-bound Range/HEAD/ETag downloads, v2 resource notifications and coordinated deletion.
 - Configure size limits in MiB. No bundled format decoder, subsetting processor or processor dispatch is advertised.
 - Publish with npm OIDC/provenance through GitHub Releases, under the `beta` dist-tag without changing `latest`.
+- Verify the same publication/transport tests on Windows, using a writable non-truncating handle for the durable file flush.
 
 ## Development snapshots (not published to npm)
 

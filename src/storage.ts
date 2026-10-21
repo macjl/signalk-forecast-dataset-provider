@@ -445,7 +445,9 @@ export class Catalogue {
           !expected.sha256 || sha256 === expected.sha256,
           'Upload checksum does not match declaration'
         )
-        const handle = await fs.open(tmp, 'r')
+        // Windows FlushFileBuffers requires a writable handle. Keep the flush
+        // before rename without truncating or rewriting the received bytes.
+        const handle = await fs.open(tmp, 'r+')
         try {
           await handle.sync()
         } finally {
