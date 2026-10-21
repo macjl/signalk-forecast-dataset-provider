@@ -29,7 +29,7 @@ export interface Declaration {
   metadata: Metadata
   requested?: JsonObject
   provenance?: JsonObject
-  assets: { id: string; size: number; sha256?: string; mediaType?: string }[]
+  assets: { id: string; size?: number; sha256?: string; mediaType?: string }[]
 }
 export interface Asset {
   id: string
@@ -63,6 +63,23 @@ export interface Staging {
   createdAt: string
   declaration: Declaration
   uploaded: Record<string, Asset>
+}
+export interface Publication extends Staging {
+  state: 'pending' | 'receiving' | 'ready'
+  progress: {
+    bytesReceived: number
+    totalBytes: number | null
+    assetsCompleted: number
+    assetsTotal: number
+    assets: Record<
+      string,
+      {
+        state: 'pending' | 'receiving' | 'complete'
+        bytesReceived: number
+        totalBytes: number | null
+      }
+    >
+  }
 }
 export interface Limits {
   maxAssetBytes: number

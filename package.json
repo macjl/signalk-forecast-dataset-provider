@@ -1,6 +1,6 @@
 {
   "name": "signalk-forecast-dataset-provider",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "description": "Signal K Resource Provider for immutable forecast datasets, original assets and verified inventories",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,6 +9,7 @@
     "docs",
     "README.md",
     "CHANGELOG.md",
+    "RELEASING.md",
     "LICENSE",
     "icon.svg"
   ],
@@ -19,7 +20,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run format:check && npm test",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "keywords": [
     "signalk-node-server-plugin",
@@ -31,6 +33,10 @@
   ],
   "author": "Jean-Laurent Girod (@macjl)",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/macjl/signalk-forecast-dataset-provider.git"

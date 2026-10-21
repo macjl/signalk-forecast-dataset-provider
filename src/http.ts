@@ -237,6 +237,12 @@ export function registerRoutes(
   write.post('/publications', body, begin)
   write.post('/datasets/:id/publications', body, begin)
   write.get(
+    '/publications',
+    wrap((_req, res) => {
+      res.set('Cache-Control', 'no-store').json(getStore().publications())
+    })
+  )
+  write.get(
     '/publications/:publication',
     wrap((req, res) => {
       res
@@ -263,11 +269,23 @@ export function registerRoutes(
       )
       if (!expected)
         throw new ApiError(404, 'ASSET_NOT_DECLARED', 'Asset was not declared')
-      if (req.get('Content-Length') !== undefined)
+      if (req.get('Content-Length') !== undefined) {
+        const length = Number(req.get('Content-Length'))
         ensure(
-          Number(req.get('Content-Length')) === expected.size,
+          Number.isSafeInteger(length) && length > 0,
+          'Invalid Content-Length'
+        )
+        ensure(
+          expected.size === undefined || length === expected.size,
           'Content-Length differs from declared size'
         )
+        if (length > getStore().limits.maxAssetBytes)
+          throw new ApiError(
+            413,
+            'SIZE_LIMIT_EXCEEDED',
+            'Content-Length exceeds configured asset size limit'
+          )
+      }
       req.setTimeout(120000, () => req.destroy(new Error('Upload timed out')))
       const asset = await getStore().upload(
         req.params.publication!,

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const { createHmac, createHash } = require('node:crypto')
+const { Readable } = require('node:stream')
 const root = '/home/node/.signalk'
 const plugin = 'signalk-forecast-dataset-provider'
 const base = 'http://127.0.0.1:3000'
@@ -60,6 +61,16 @@ async function configure() {
   throw new Error('Plugin did not recover after configuration restart')
 }
 async function main() {
+  const configDir = path.join(root, 'plugin-config-data')
+  const configs = Object.fromEntries(
+    fs
+      .readdirSync(configDir)
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => [
+        file,
+        JSON.parse(fs.readFileSync(path.join(configDir, file), 'utf8'))
+      ])
+  )
   const initial = await get('/signalk/v2/api/resources/forecastDatasets')
   const initialIds = Object.keys(initial).sort()
   const files = [
@@ -69,27 +80,120 @@ async function main() {
   let response = await call(`${api}/publications`, {
     method: 'POST',
     json: {
-      kind: 'forecast',
-      format: 'grib2',
+      kind: 'analysis',
+      format: 'json',
       producer: prefix,
       metadata: { name: prefix, model: 'TEST' },
       assets: files.map((bytes, i) => ({
         id: `part-${i}`,
-        size: bytes.length,
-        sha256: createHash('sha256').update(bytes).digest('hex')
+        ...(i
+          ? {
+              size: bytes.length,
+              sha256: createHash('sha256').update(bytes).digest('hex')
+            }
+          : {})
       }))
     }
   })
   assert.equal(response.status, 201)
   const stage = await response.json()
   publications.add(stage.id)
+  assert.equal(stage.progress.totalBytes, null)
+  assert.ok((await get(`${api}/publications`))[stage.id])
+  const readonlyFile = path.join(
+    configDir,
+    'signalk-grib-weather-provider',
+    'catalogue-token'
+  )
+  if (fs.existsSync(readonlyFile)) {
+    const readonly = fs.readFileSync(readonlyFile, 'utf8').trim()
+    const headers = { Authorization: `Bearer ${readonly}` }
+    assert.equal((await call(`${api}/datasets`, { headers })).status, 200)
+    assert.ok(
+      [401, 403].includes(
+        (await call(`${api}/publications`, { headers })).status
+      )
+    )
+  }
+  async function waitStage(predicate) {
+    for (let i = 0; i < 100; i++) {
+      const current = await get(`${api}/publications/${stage.id}`)
+      if (predicate(current)) return current
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error('Publication progress did not reach expected state')
+  }
+  // Abort a real chunked request after the provider has accepted some bytes.
+  let releaseBroken
+  const brokenGate = new Promise((resolve) => {
+    releaseBroken = resolve
+  })
+  const abort = new AbortController()
+  const broken = call(`${api}/publications/${stage.id}/assets/part-0`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: Readable.from(
+      (async function* () {
+        yield files[0].subarray(0, 4)
+        await brokenGate
+      })()
+    ),
+    duplex: 'half',
+    signal: abort.signal
+  }).then(
+    () => {
+      throw new Error('Aborted upload unexpectedly completed')
+    },
+    () => {}
+  )
+  try {
+    await waitStage(
+      (p) => p.state === 'receiving' && p.progress.bytesReceived === 4
+    )
+  } finally {
+    abort.abort()
+    releaseBroken()
+  }
+  await broken
+  await waitStage(
+    (p) => p.state === 'pending' && p.progress.bytesReceived === 0
+  )
   for (let i = 0; i < files.length; i++) {
-    response = await call(`${api}/publications/${stage.id}/assets/part-${i}`, {
+    let release
+    const gate = new Promise((resolve) => {
+      release = resolve
+    })
+    const upload = call(`${api}/publications/${stage.id}/assets/part-${i}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: files[i]
+      body: i
+        ? files[i]
+        : Readable.from(
+            (async function* () {
+              yield files[0].subarray(0, 4)
+              await gate
+              yield files[0].subarray(4)
+            })()
+          ),
+      ...(i ? {} : { duplex: 'half' })
     })
+    if (!i) {
+      try {
+        await waitStage(
+          (p) => p.state === 'receiving' && p.progress.bytesReceived === 4
+        )
+      } finally {
+        release()
+      }
+    }
+    response = await upload
     assert.equal(response.status, 201)
+    const measured = await response.json()
+    assert.equal(measured.size, files[i].length)
+    assert.equal(
+      measured.sha256,
+      createHash('sha256').update(files[i]).digest('hex')
+    )
     if (i === 0) {
       assert.equal(
         Object.keys(await get('/signalk/v2/api/resources/forecastDatasets'))
@@ -111,6 +215,7 @@ async function main() {
       )
     }
   }
+  assert.equal((await get(`${api}/publications/${stage.id}`)).state, 'ready')
   response = await call(`${api}/publications/${stage.id}/commit`, {
     method: 'POST'
   })
@@ -119,7 +224,7 @@ async function main() {
   datasets.add(record.id)
   publications.delete(stage.id)
   console.log(
-    'PASS: real Signal K 2.34 publication API, two original assets, incomplete commit rejection and upload recovery after plugin restart'
+    'PASS: Signal K 2.34 unknown-size chunked streaming, live progress, aborted upload cleanup/retry, mixed-size publication and recovery after plugin restart'
   )
   const listed = await get(
     '/signalk/v2/api/resources/forecastDatasets?model=TEST'
@@ -228,16 +333,7 @@ async function main() {
     Object.keys(await get('/signalk/v2/api/resources/forecastDatasets')).sort(),
     initialIds
   )
-  const marker = path.join(
-    root,
-    'local-packages',
-    'forecast-provider-install-backup.json'
-  )
-  if (fs.existsSync(marker)) {
-    const { backup } = JSON.parse(fs.readFileSync(marker, 'utf8'))
-    const configs = JSON.parse(
-      fs.readFileSync(path.join(backup, 'plugin-configs.json'), 'utf8')
-    )
+  {
     for (const [file, config] of Object.entries(configs))
       assert.deepEqual(
         JSON.parse(

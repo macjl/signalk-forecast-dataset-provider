@@ -13,6 +13,7 @@ import {
   type Declaration,
   type Inventory,
   type Limits,
+  type Publication,
   type Staging,
   type Version
 } from './types'
@@ -71,6 +72,7 @@ export class Catalogue {
   private versions = new Map<string, Map<string, Version>>()
   private heads = new Map<string, string>()
   private staged = new Map<string, Staging>()
+  private receiving = new Map<string, { assetId: string; bytes: number }>()
   private locks = new Map<string, Promise<void>>()
   private readers = new Map<string, number>()
   private deleting = new Set<string>()
@@ -219,7 +221,9 @@ export class Catalogue {
           ensure(
             stat.isFile() &&
               !stat.isSymbolicLink() &&
-              stat.size === expected.size,
+              stat.size > 0 &&
+              stat.size <= this.limits.maxAssetBytes &&
+              (expected.size === undefined || stat.size === expected.size),
             'Invalid staged asset'
           )
           const hash = createHash('sha256')
@@ -252,6 +256,14 @@ export class Catalogue {
       ))
         if (file.endsWith('.part'))
           await fs.rm(path.join(this.stageDir(id), 'assets', file))
+      ensure(
+        stage.declaration.assets.reduce(
+          (sum, asset) =>
+            sum + (stage.uploaded[asset.id]?.size ?? asset.size ?? 0),
+          0
+        ) <= this.limits.maxDatasetBytes,
+        'Recovered publication exceeds configured dataset size limit'
+      )
       this.staged.set(id, stage)
       await atomicJson(path.join(this.stageDir(id), 'publication.json'), stage)
     }
@@ -264,7 +276,7 @@ export class Catalogue {
       await new Promise<void>((resolve) => this.drained.add(resolve))
   }
 
-  async begin(input: unknown, datasetId?: string): Promise<Staging> {
+  async begin(input: unknown, datasetId?: string): Promise<Publication> {
     return this.exclusive('catalogue', async () => {
       this.ready()
       if (this.staged.size >= this.limits.maxStaging)
@@ -290,11 +302,11 @@ export class Catalogue {
         stage
       )
       this.staged.set(stage.id, stage)
-      return structuredClone(stage)
+      return this.publication(stage.id)
     })
   }
 
-  publication(id: string): Staging {
+  private stage(id: string): Staging {
     identifier(id)
     const stage = this.staged.get(id)
     if (!stage)
@@ -302,11 +314,67 @@ export class Catalogue {
     return structuredClone(stage)
   }
 
+  publications(): Record<string, Publication> {
+    this.ready()
+    return Object.fromEntries(
+      [...this.staged.values()]
+        .sort(
+          (a, b) =>
+            b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)
+        )
+        .map((stage) => [stage.id, this.publication(stage.id)])
+    )
+  }
+
+  publication(id: string): Publication {
+    this.ready()
+    const stage = this.stage(id)
+    const active = this.receiving.get(id)
+    const assets: Publication['progress']['assets'] = {}
+    let bytesReceived = 0
+    let totalBytes: number | null = 0
+    let assetsCompleted = 0
+    for (const declared of stage.declaration.assets) {
+      const uploaded = stage.uploaded[declared.id]
+      const bytes =
+        uploaded?.size ?? (active?.assetId === declared.id ? active.bytes : 0)
+      const total = uploaded?.size ?? declared.size ?? null
+      assets[declared.id] = {
+        state: uploaded
+          ? 'complete'
+          : active?.assetId === declared.id
+            ? 'receiving'
+            : 'pending',
+        bytesReceived: bytes,
+        totalBytes: total
+      }
+      bytesReceived += bytes
+      if (total === null) totalBytes = null
+      else if (totalBytes !== null) totalBytes += total
+      if (uploaded) assetsCompleted++
+    }
+    return {
+      ...stage,
+      state: active
+        ? 'receiving'
+        : assetsCompleted === stage.declaration.assets.length
+          ? 'ready'
+          : 'pending',
+      progress: {
+        bytesReceived,
+        totalBytes,
+        assetsCompleted,
+        assetsTotal: stage.declaration.assets.length,
+        assets
+      }
+    }
+  }
+
   async upload(id: string, assetId: string, stream: Readable): Promise<Asset> {
     return this.exclusive(`publication:${identifier(id)}`, async () => {
       this.ready()
       identifier(assetId)
-      const stage = this.publication(id)
+      const stage = this.stage(id)
       const expected = stage.declaration.assets.find((a) => a.id === assetId)
       if (!expected)
         throw new ApiError(404, 'ASSET_NOT_DECLARED', 'Asset was not declared')
@@ -323,16 +391,41 @@ export class Catalogue {
       )
       const file = path.join(this.stageDir(id), 'assets', assetId)
       const hash = createHash('sha256')
+      // Uploads are serialised per publication. Reserve the known sizes of other
+      // assets and count actual completed sizes, including formerly unknown ones.
+      const otherBytes = stage.declaration.assets.reduce(
+        (sum, asset) =>
+          sum +
+          (asset.id === assetId
+            ? 0
+            : (stage.uploaded[asset.id]?.size ?? asset.size ?? 0)),
+        0
+      )
+      const assetLimit = this.limits.maxAssetBytes
+      const datasetLimit = this.limits.maxDatasetBytes
+      const progress = { assetId, bytes: 0 }
+      this.receiving.set(id, progress)
       let bytes = 0
       const check = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           bytes += chunk.length
-          if (bytes > expected.size) {
+          if (expected.size !== undefined && bytes > expected.size) {
             callback(
               new ApiError(413, 'SIZE_EXCEEDED', 'Upload exceeds declared size')
             )
             return
           }
+          if (bytes > assetLimit || bytes + otherBytes > datasetLimit) {
+            callback(
+              new ApiError(
+                413,
+                'SIZE_LIMIT_EXCEEDED',
+                'Upload exceeds configured asset or dataset size limit'
+              )
+            )
+            return
+          }
+          progress.bytes = bytes
           hash.update(chunk)
           callback(null, chunk)
         }
@@ -344,7 +437,7 @@ export class Catalogue {
           createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
         )
         ensure(
-          bytes === expected.size,
+          bytes > 0 && (expected.size === undefined || bytes === expected.size),
           'Upload size does not match declaration'
         )
         const sha256 = hash.digest('hex')
@@ -376,6 +469,8 @@ export class Catalogue {
       } catch (error) {
         await fs.rm(tmp, { force: true })
         throw error
+      } finally {
+        this.receiving.delete(id)
       }
     })
   }

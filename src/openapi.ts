@@ -99,10 +99,15 @@ const declaration = {
       minItems: 1,
       items: {
         type: 'object',
-        required: ['id', 'size'],
+        required: ['id'],
         properties: {
           id: { type: 'string' },
-          size: { type: 'integer', minimum: 1 },
+          size: {
+            type: 'integer',
+            minimum: 1,
+            description:
+              'Optional exact expected byte length; measured during upload when omitted'
+          },
           sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
           mediaType: { type: 'string' }
         }
@@ -120,7 +125,7 @@ export const openApi = {
   openapi: '3.0.3',
   info: {
     title: 'Forecast Dataset Provider',
-    version: '0.1.0',
+    version: '0.1.0-beta.1',
     description:
       'Experimental contract 0.1. Original-content catalogue; no GRIB/Zarr decoding or subset processor is bundled.'
   },
@@ -229,12 +234,22 @@ export const openApi = {
         }
       }
     },
-    '/publications': { post: publish },
+    '/publications': {
+      post: publish,
+      get: {
+        summary:
+          'Writer-only: list unfinished publications and live byte/file progress',
+        description:
+          'Returns a map keyed by publication ID. State is pending, receiving or ready (awaiting explicit commit). Total bytes are null while any asset size remains unknown. No-store; polling supported. Uncommitted bytes are never exposed as usable datasets.',
+        responses: { '200': ok, ...errors }
+      }
+    },
     '/datasets/{id}/publications': { parameters: [id], post: publish },
     '/publications/{publication}': {
       parameters: [publication],
       get: {
-        summary: 'Private staging status; resume missing uploads',
+        summary:
+          'Writer-only staging status with live byte/file progress; resume missing uploads',
         responses: { '200': ok, ...errors }
       },
       delete: {
@@ -256,7 +271,10 @@ export const openApi = {
         },
         responses: {
           '201': ok,
-          '413': { description: 'Declared size exceeded' },
+          '413': {
+            description:
+              'Declared size or configured asset/dataset limit exceeded'
+          },
           '415': { description: 'Unencoded octet-stream required' },
           ...errors
         }

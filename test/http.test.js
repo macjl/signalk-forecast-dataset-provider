@@ -5,10 +5,13 @@ const fs = require('node:fs/promises')
 const os = require('node:os')
 const path = require('node:path')
 const { once } = require('node:events')
+const { Readable } = require('node:stream')
+const { createHash } = require('node:crypto')
 const express = require('express')
 const createPlugin = require('../dist')
 const { PLUGIN_ID, API_ROOT, RESOURCE_TYPE } = require('../dist/types')
 const { byteRange } = require('../dist/http')
+const { BYTES_PER_MIB } = require('../dist/settings')
 
 // This adapter enforces the access declarations that Signal K normally applies.
 // It is not a replacement for testing against an actual Signal K instance.
@@ -168,6 +171,122 @@ test('external client publishes, discovers and downloads binary content without 
     delta[1].updates[0].values[0].path,
     `resources.forecastDatasets.${record.id}`
   )
+})
+
+test('writer lists live unknown-size uploads; readers cannot inspect staging and commit stays explicit', async (t) => {
+  const f = await fixture(t)
+  let response = await f.call('/publications', {
+    method: 'POST',
+    role: 'readwrite',
+    json: {
+      kind: 'forecast',
+      format: 'grib2',
+      producer: 'streaming-client',
+      assets: [{ id: 'forecast' }]
+    }
+  })
+  assert.equal(response.status, 201)
+  const publication = await response.json()
+  assert.equal(publication.progress.totalBytes, null)
+  assert.equal(
+    (await f.call('/publications', { role: 'readonly' })).status,
+    403
+  )
+  assert.equal((await f.call('/publications', { role: null })).status, 401)
+  assert.equal(
+    (await f.call(`/publications/${publication.id}`, { role: 'readonly' }))
+      .status,
+    403
+  )
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release())
+  const body = Readable.from(
+    (async function* () {
+      yield content.subarray(0, 4)
+      await gate
+      yield content.subarray(4)
+    })()
+  )
+  const uploading = f.call(`/publications/${publication.id}/assets/forecast`, {
+    method: 'PUT',
+    role: 'readwrite',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body,
+    duplex: 'half'
+  })
+  let status
+  for (let i = 0; i < 100; i++) {
+    response = await f.call('/publications', { role: 'readwrite' })
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    status = (await response.json())[publication.id]
+    if (status.progress.bytesReceived === 4) break
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal(status.state, 'receiving')
+  assert.equal(status.progress.bytesReceived, 4)
+  assert.deepEqual(await (await f.call('/datasets')).json(), {})
+  release()
+  response = await uploading
+  assert.equal(response.status, 201)
+  const measured = await response.json()
+  assert.equal(measured.size, content.length)
+  assert.equal(
+    measured.sha256,
+    createHash('sha256').update(content).digest('hex')
+  )
+  assert.equal(
+    (await (await f.call(`/publications/${publication.id}`)).json()).state,
+    'ready'
+  )
+  assert.deepEqual(await (await f.call('/datasets')).json(), {})
+  response = await f.call(`/publications/${publication.id}/commit`, {
+    method: 'POST'
+  })
+  assert.equal(response.status, 201)
+  const record = await response.json()
+  assert.deepEqual(
+    Buffer.from(
+      await (
+        await f.call(record.assets[0].href.slice(API_ROOT.length))
+      ).arrayBuffer()
+    ),
+    content
+  )
+  assert.deepEqual(await (await f.call('/publications')).json(), {})
+})
+
+test('unknown declaration accepts Content-Length but never bypasses configured limits', async (t) => {
+  const f = await fixture(t, { maxAssetMiB: 5 / BYTES_PER_MIB })
+  const response = await f.call('/publications', {
+    method: 'POST',
+    json: {
+      kind: 'forecast',
+      format: 'grib2',
+      producer: 'client',
+      assets: [{ id: 'a' }]
+    }
+  })
+  const p = await response.json()
+  assert.equal(
+    (
+      await f.call(`/publications/${p.id}/assets/a`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: content
+      })
+    ).status,
+    413
+  )
+  const uploaded = await f.call(`/publications/${p.id}/assets/a`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: 'abc'
+  })
+  assert.equal(uploaded.status, 201)
+  assert.equal((await uploaded.json()).size, 3)
 })
 
 test('Range, suffix/open ranges, HEAD and conditional validators refer to exact original bytes', async (t) => {

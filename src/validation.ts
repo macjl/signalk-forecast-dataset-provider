@@ -215,14 +215,17 @@ export function declaration(value: unknown, limits: Limits): Declaration {
     const a = object(item, 'asset')
     keys(a, ['id', 'size', 'sha256', 'mediaType'], 'asset')
     const id = identifier(a.id)
-    ensure(
-      typeof a.size === 'number' &&
-        Number.isSafeInteger(a.size) &&
-        a.size > 0 &&
-        a.size <= limits.maxAssetBytes,
-      'Invalid asset size'
-    )
-    const asset: Declaration['assets'][number] = { id, size: a.size }
+    const asset: Declaration['assets'][number] = { id }
+    if (a.size !== undefined) {
+      ensure(
+        typeof a.size === 'number' &&
+          Number.isSafeInteger(a.size) &&
+          a.size > 0 &&
+          a.size <= limits.maxAssetBytes,
+        'Invalid asset size'
+      )
+      asset.size = a.size
+    }
     if (a.sha256 !== undefined) {
       ensure(
         typeof a.sha256 === 'string' && /^[a-f0-9]{64}$/.test(a.sha256),
@@ -242,7 +245,7 @@ export function declaration(value: unknown, limits: Limits): Declaration {
     'Duplicate or case-colliding asset identifiers'
   )
   ensure(
-    assets.reduce((n, a) => n + a.size, 0) <= limits.maxDatasetBytes,
+    assets.reduce((n, a) => n + (a.size ?? 0), 0) <= limits.maxDatasetBytes,
     'Dataset exceeds configured size limit'
   )
   const result: Declaration = {

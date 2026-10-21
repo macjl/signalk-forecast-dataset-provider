@@ -10,9 +10,10 @@ import type {
 import { Catalogue } from './storage'
 import { listResources } from './discovery'
 import { registerRoutes } from './http'
-import { ApiError, ensure, object } from './validation'
-import { DEFAULT_LIMITS, PLUGIN_ID, RESOURCE_TYPE, type Limits } from './types'
+import { ApiError } from './validation'
+import { PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { openApi } from './openapi'
+import { parseSettings, settingsSchema } from './settings'
 
 function createPlugin(app: ServerAPI): Plugin {
   let current: Catalogue | undefined
@@ -28,63 +29,11 @@ function createPlugin(app: ServerAPI): Plugin {
     name: 'Forecast Dataset Provider',
     description:
       'Catalogue and immutable original-content access for forecast datasets',
-    schema: {
-      type: 'object',
-      properties: {
-        storageDirectory: {
-          type: 'string',
-          title: 'Storage directory',
-          description:
-            'Empty uses this plugin’s Signal K data directory. Must support hard links and atomic file rename.',
-          default: ''
-        },
-        maxAssetBytes: {
-          type: 'integer',
-          title: 'Maximum bytes per asset',
-          minimum: 1,
-          default: DEFAULT_LIMITS.maxAssetBytes
-        },
-        maxDatasetBytes: {
-          type: 'integer',
-          title: 'Maximum bytes per dataset',
-          minimum: 1,
-          default: DEFAULT_LIMITS.maxDatasetBytes
-        },
-        maxAssets: {
-          type: 'integer',
-          title: 'Maximum assets per publication',
-          minimum: 1,
-          default: DEFAULT_LIMITS.maxAssets
-        },
-        maxStaging: {
-          type: 'integer',
-          title: 'Maximum unfinished publications',
-          minimum: 1,
-          default: DEFAULT_LIMITS.maxStaging
-        }
-      }
-    },
+    schema: settingsSchema(),
     start(settings) {
       const attempt = ++generation
       starting = (async () => {
-        const input = object(settings, 'settings')
-        const limits: Limits = { ...DEFAULT_LIMITS }
-        for (const key of Object.keys(limits) as (keyof Limits)[]) {
-          if (input[key] !== undefined) {
-            ensure(
-              typeof input[key] === 'number' &&
-                Number.isSafeInteger(input[key]) &&
-                input[key] > 0,
-              `Invalid ${key}`
-            )
-            limits[key] = input[key]
-          }
-        }
-        ensure(
-          input.storageDirectory === undefined ||
-            typeof input.storageDirectory === 'string',
-          'Invalid storageDirectory'
-        )
+        const { limits, configuration: input } = parseSettings(settings)
         const root = input.storageDirectory
           ? path.resolve(input.storageDirectory as string)
           : path.join(app.getDataDirPath(), 'catalogue')

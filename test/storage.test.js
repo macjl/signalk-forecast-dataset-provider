@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const os = require('node:os')
-const { Readable } = require('node:stream')
+const { Readable, PassThrough } = require('node:stream')
 const { createHash, randomUUID } = require('node:crypto')
 const { Catalogue, digest } = require('../dist/storage')
 const { listResources } = require('../dist/discovery')
@@ -114,13 +114,130 @@ test('restart recovers completed uploads without downloading them again', async 
   assert.equal((await f.store.commit(p.id)).assets.length, 2)
 })
 
+test('unknown-size streams report live progress, survive restart and require explicit commit', async (t) => {
+  const f = await fixture(t)
+  const declaration = input([bytes, Buffer.from('later')])
+  delete declaration.assets[0].size
+  delete declaration.assets[1].size
+  const p = await f.store.begin(declaration)
+  assert.equal(p.state, 'pending')
+  assert.equal(p.progress.totalBytes, null)
+  assert.deepEqual(Object.keys(f.store.publications()), [p.id])
+  const stream = new PassThrough()
+  const uploading = f.store.upload(p.id, 'part-0', stream)
+  stream.write(bytes.subarray(0, 4))
+  for (
+    let i = 0;
+    i < 100 && f.store.publication(p.id).progress.bytesReceived !== 4;
+    i++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  const receiving = f.store.publication(p.id)
+  assert.equal(receiving.state, 'receiving')
+  assert.equal(receiving.progress.bytesReceived, 4)
+  assert.equal(receiving.progress.assets['part-0'].state, 'receiving')
+  assert.deepEqual(f.store.all(), [])
+  stream.end(bytes.subarray(4))
+  const asset = await uploading
+  assert.equal(asset.size, bytes.length)
+  assert.equal(asset.sha256, createHash('sha256').update(bytes).digest('hex'))
+  assert.equal(f.store.publication(p.id).progress.assetsCompleted, 1)
+  await f.restart()
+  assert.equal(f.store.publication(p.id).progress.bytesReceived, bytes.length)
+  assert.equal(f.store.publication(p.id).progress.totalBytes, null)
+  await f.store.upload(p.id, 'part-1', Readable.from(['later']))
+  const ready = f.store.publication(p.id)
+  assert.equal(ready.state, 'ready')
+  assert.equal(ready.progress.totalBytes, bytes.length + 5)
+  assert.equal(ready.progress.assetsCompleted, 2)
+  assert.deepEqual(f.store.all(), [])
+  const record = await f.store.commit(p.id)
+  assert.equal(record.assets.length, 2)
+  assert.deepEqual(f.store.publications(), {})
+  await f.restart()
+  assert.equal(f.store.get(record.id).version, record.version)
+})
+
+test('unknown-size streams enforce asset and cumulative dataset limits and reject empty/bad-hash uploads', async (t) => {
+  const f = await fixture(t, {
+    ...DEFAULT_LIMITS,
+    maxAssetBytes: 10,
+    maxDatasetBytes: 12
+  })
+  const p = await f.store.begin({
+    ...input(),
+    assets: [{ id: 'a' }, { id: 'b' }]
+  })
+  await assert.rejects(
+    f.store.upload(p.id, 'a', Readable.from([Buffer.alloc(11)])),
+    (e) => e.status === 413
+  )
+  await assert.rejects(f.store.upload(p.id, 'a', Readable.from([])), /size/)
+  await f.store.upload(p.id, 'a', Readable.from([Buffer.alloc(8)]))
+  await assert.rejects(
+    f.store.upload(p.id, 'b', Readable.from([Buffer.alloc(5)])),
+    (e) => e.status === 413
+  )
+  assert.equal(f.store.publication(p.id).state, 'pending')
+  assert.equal(f.store.publication(p.id).progress.bytesReceived, 8)
+  await f.restart()
+  await f.store.upload(p.id, 'b', Readable.from([Buffer.alloc(4)]))
+  assert.equal(
+    (await f.store.commit(p.id)).assets.reduce((n, a) => n + a.size, 0),
+    12
+  )
+  const q = await f.store.begin({
+    ...input(),
+    assets: [{ id: 'a', sha256: '0'.repeat(64) }]
+  })
+  await assert.rejects(
+    f.store.upload(q.id, 'a', Readable.from(['abc'])),
+    /checksum/
+  )
+  assert.deepEqual(f.store.publication(q.id).uploaded, {})
+  assert.deepEqual(
+    await fs.readdir(path.join(f.root, 'staging', q.id, 'assets')),
+    []
+  )
+})
+
+test('known-size reservations and broken unknown streams never consume other completed assets', async (t) => {
+  const f = await fixture(t, { ...DEFAULT_LIMITS, maxDatasetBytes: 12 })
+  const p = await f.store.begin({
+    ...input(),
+    assets: [{ id: 'a' }, { id: 'b', size: 8 }]
+  })
+  await assert.rejects(
+    f.store.upload(p.id, 'a', Readable.from([Buffer.alloc(5)])),
+    (e) => e.status === 413
+  )
+  await f.store.upload(p.id, 'b', Readable.from([Buffer.alloc(8)]))
+  const broken = new Readable({
+    read() {
+      this.push('abc')
+      this.destroy(new Error('upstream failed'))
+    }
+  })
+  await assert.rejects(f.store.upload(p.id, 'a', broken), /upstream failed/)
+  assert.equal(f.store.publication(p.id).progress.bytesReceived, 8)
+  await fs.writeFile(
+    path.join(f.root, 'staging', p.id, 'assets', 'interrupted.part'),
+    'ab'
+  )
+  await f.restart()
+  assert.equal(f.store.publication(p.id).progress.assets.a.state, 'pending')
+  assert.equal(f.store.publication(p.id).uploaded.b.size, 8)
+  await f.store.upload(p.id, 'a', Readable.from(['abcd']))
+  assert.equal((await f.store.commit(p.id)).assets.length, 2)
+})
+
 test('interrupted head publication resumes from staged bytes after restart', async (t) => {
   const f = await fixture(t)
   const p = await f.store.begin(input())
   await f.store.upload(p.id, 'part-0', Readable.from([bytes]))
   const rename = fs.rename
   fs.rename = async (a, b) => {
-    if (String(b).endsWith('/head.json'))
+    if (path.basename(String(b)) === 'head.json')
       throw new Error('simulated power loss before head')
     return rename(a, b)
   }
@@ -142,7 +259,8 @@ test('uncommitted version of an existing dataset never becomes visible after res
   await f.store.upload(p.id, 'part-0', Readable.from(['new-run']))
   const rename = fs.rename
   fs.rename = async (a, b) => {
-    if (String(b).endsWith('/head.json')) throw new Error('head failure')
+    if (path.basename(String(b)) === 'head.json')
+      throw new Error('head failure')
     return rename(a, b)
   }
   try {
@@ -312,7 +430,7 @@ test('reader arriving during deletion cannot acquire a disappearing asset', asyn
     entered = resolve
   })
   fs.rename = async (a, b) => {
-    if (String(b).includes('/trash/')) {
+    if (path.basename(path.dirname(String(b))) === 'trash') {
       entered()
       await pause
     }

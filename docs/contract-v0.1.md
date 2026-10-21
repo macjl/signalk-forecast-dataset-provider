@@ -21,15 +21,42 @@ This document records prototype choices left open in the [project outline](https
 }
 ```
 
-The example lengths must be replaced with actual file sizes. The response has status 201 and a `Location` pointing to the publication. It contains `id` (the publication UUID), `datasetId`, `createdAt`, `declaration`, and the initially empty `uploaded` map.
+If supplied, the example lengths must be replaced with actual expected file sizes; omit `size` entirely when unknown. The response has status 201 and a `Location` pointing to the publication. It contains `id` (the publication UUID), `datasetId`, `createdAt`, `declaration`, the initially empty `uploaded` map, plus the staging `state` and `progress` described below.
 
 Required fields are `kind` (`forecast`, `analysis` or `harmonic`), a lowercase `format` identifier, a descriptive `producer` label and a non-empty `assets` array. Other formats may be stored without implying any processing support. `metadata` defaults to an empty object. Optional asset SHA-256 digests must be 64 lowercase hex digits and are checked during upload.
 
-Asset identifiers contain ASCII letters, digits, `_` and `-`, start with an alphanumeric character, and are at most 128 characters. Duplicate or case-colliding IDs, reserved prototype keys, paths, unbounded sizes and unknown declaration properties are rejected. Metadata keys are `name`, `description`, `model`, UTC `run`, WGS84 `bounds`, `forecast`, `fields` and opaque `grid`. `requested` and `provenance` are bounded JSON objects; publish only information intended for authenticated catalogue readers.
+Asset identifiers contain ASCII letters, digits, `_` and `-`, start with an alphanumeric character, and are at most 128 characters. Duplicate or case-colliding IDs, reserved prototype keys, paths, invalid/out-of-limit declared sizes and unknown declaration properties are rejected. `size` is optional since package 0.1.1 (an additive extension of contract 0.1); `null` is not a valid size. Supplied sizes must be positive safe integers. Metadata keys are `name`, `description`, `model`, UTC `run`, WGS84 `bounds`, `forecast`, `fields` and opaque `grid`. `requested` and `provenance` are bounded JSON objects; publish only information intended for authenticated catalogue readers.
 
-`PUT /publications/{publication}/assets/{asset}` accepts raw, unencoded `application/octet-stream` bytes. `Content-Length`, when present, must equal the declaration. The stream is bounded by the declared size, hashed while written, fsynced and renamed to its completed asset ID only when validated. Over-limit or broken chunked streams may be terminated; check publication status before retrying. The request has a 120-second socket inactivity timeout.
+`PUT /publications/{publication}/assets/{asset}` accepts raw, unencoded `application/octet-stream` bytes. A positive `Content-Length` is optional; when both it and a declared size exist they must match. Chunked requests do not require a preliminary HEAD request or local file. The provider measures actual size and SHA-256 during reception, and checks any supplied expectations at completion. The returned asset always has measured `size` and `sha256`. Empty uploads are rejected.
 
-`GET /publications/{publication}` returns staging status for writers. Completed assets appear in `uploaded`, with `id`, `size`, `sha256` and `mediaType`. Re-uploading a finished asset returns 409. Interrupted partial files are removed after an error or recovery, while finished uploads are rehashed on startup and preserved. Resume at the asset level; no partial-byte resume is claimed.
+Configured per-asset and per-dataset limits are enforced during reception, even when sizes are unknown. Uploads are serialised per publication; the dataset budget counts other completed assets at their measured sizes and reserves known sizes of unfinished assets. Rejected or broken uploads discard their partial file, release its budget and preserve all other completed assets. Over-limit or broken chunked streams may be terminated rather than yield a JSON error; check publication status before retrying. Accepted files are fsynced and renamed to their completed asset ID. The request has a 120-second socket inactivity timeout.
+
+`GET /publications/{publication}` returns staging status for writers. Completed assets appear in `uploaded`, with `id`, `size`, `sha256` and `mediaType`. Re-uploading a finished asset returns 409. Interrupted partial files are removed after an error or recovery, while finished uploads (including originally unknown-size ones) are rehashed on startup and preserved. Resume at the asset level; no partial-byte resume is claimed.
+
+`GET /publications` returns a map keyed by publication UUID, newest-created first. It is bounded by `maxStaging`, not paginated, and includes only unfinished publications. Both GET endpoints are readwrite-only, use `Cache-Control: no-store`, and add the following live view without changing the persisted staging manifest:
+
+```json
+{
+  "state": "receiving",
+  "progress": {
+    "bytesReceived": 4096,
+    "totalBytes": null,
+    "assetsCompleted": 0,
+    "assetsTotal": 1,
+    "assets": {
+      "wind": {
+        "state": "receiving",
+        "bytesReceived": 4096,
+        "totalBytes": null
+      }
+    }
+  }
+}
+```
+
+Publication states are `pending` (waiting, interrupted or partially completed), `receiving` (an active upload) and `ready` (all assets received, still awaiting explicit commit). Per-asset states are `pending`, `receiving`, `complete`. Byte progress includes completed assets plus the accepted bytes of the active stream, not a durability guarantee. Total bytes are null while any asset has neither a declared size nor a completed measured size; clients must not invent a percentage. Totals become exact after every upload completes. Live partial progress is kept in memory only; after failure/restart it returns to zero for that asset. A producer may retry later, so `pending` does not imply an active network transfer. Polling these endpoints does not enumerate partial content through Resources API or make it downloadable. No progress delta/event stream is promised by this extension.
+
+The producer must propagate upstream read errors by aborting its upload, and commit only after confirming that acquisition succeeded. A normally terminated, unknown-size stream cannot by itself reveal that an upstream application silently returned incomplete content. The calculated hash identifies received bytes, not completeness, authenticity or GRIB validity. Validation of declared length/hash and publication completeness remains separate from format inspection by an indexer.
 
 `POST /publications/{publication}/commit` returns 409 if any declared asset is missing. On success it returns 201 and the complete resource, with a version-bound detail `Location`. Publication does not require indexing or combining assets. Its scope is the declared files, not every file or step available in an upstream model.
 

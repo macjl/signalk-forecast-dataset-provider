@@ -11,5 +11,11 @@ test('published OpenAPI document is valid and advertises only implemented endpoi
     '/plugins/signalk-forecast-dataset-provider'
   )
   assert.ok(document.paths['/publications/{publication}/commit'])
+  assert.ok(document.paths['/publications'].get)
+  assert.deepEqual(
+    document.paths['/publications'].post.requestBody.content['application/json']
+      .schema.properties.assets.items.required,
+    ['id']
+  )
   assert.equal(document.paths['/processors'], undefined)
 })
