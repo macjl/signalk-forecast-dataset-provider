@@ -1,0 +1,64 @@
+{
+  "name": "signalk-forecast-dataset-provider",
+  "version": "0.1.0",
+  "description": "Signal K Resource Provider for immutable forecast datasets, original assets and verified inventories",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run format:check && npm test",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-weather",
+    "forecast",
+    "datasets",
+    "resources",
+    "grib"
+  ],
+  "author": "Jean-Laurent Girod (@macjl)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/macjl/signalk-forecast-dataset-provider.git"
+  },
+  "homepage": "https://github.com/macjl/signalk-forecast-dataset-provider#readme",
+  "bugs": {
+    "url": "https://github.com/macjl/signalk-forecast-dataset-provider/issues"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": {
+    "displayName": "Forecast Dataset Provider",
+    "appIcon": "icon.svg"
+  },
+  "peerDependencies": {
+    "@signalk/server-api": ">=2.34.0 <3"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "@signalk/server-api": "2.34.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.19.0",
+    "prettier": "^3.6.2",
+    "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
