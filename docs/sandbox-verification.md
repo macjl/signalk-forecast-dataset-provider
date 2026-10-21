@@ -12,6 +12,8 @@ The helper enables only Forecast Dataset Provider. A container restart loads the
 
 Do not run these helpers against another installation without adapting their fixed paths and reviewing the deployment scope. They are not general production installers.
 
+The helpers require `SIGNALK_CONTAINER_ID=signalk-sandbox` and an explicitly supplied absolute `SIGNALK_CONFIG_DIR` (the selected container's configuration directory). They do not infer a hardcoded home directory. Pass it through `docker exec -e SIGNALK_CONFIG_DIR=<absolute-config-directory> ...` when invoking a helper.
+
 ## Results — initial version 0.1.0
 
 The first-install helper deployed version 0.1.0 and enabled the plugin. The existing container image, mounts and overlays were preserved; existing packages were not re-resolved. Pre-install manifests and plugin configurations were backed up inside the sandbox under `local-packages/forecast-provider-before-install-2026-10-21T09-35-20-214Z`.

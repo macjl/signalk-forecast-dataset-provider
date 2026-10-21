@@ -6,7 +6,12 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { createHmac, createHash } = require('node:crypto')
 const { Readable } = require('node:stream')
-const root = '/home/node/.signalk'
+assert.equal(process.env.SIGNALK_CONTAINER_ID, 'signalk-sandbox')
+const root = process.env.SIGNALK_CONFIG_DIR
+assert.ok(
+  root && path.isAbsolute(root),
+  'Set an absolute SIGNALK_CONFIG_DIR for the selected sandbox'
+)
 const plugin = 'signalk-forecast-dataset-provider'
 const base = 'http://127.0.0.1:3000'
 const api = `/plugins/${plugin}`
