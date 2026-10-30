@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0 — 2026-10-30
+
+- First stable catalogue release, promoting the tested streaming publication,
+  immutable multi-asset storage, discovery, transport and progress-monitoring API.
+- Update the Express 4 lockfile to body-parser 1.20.9, fixing GHSA-27r3-jxmh-p828.
+- Document the coordinated Downloader 0.4.0 / Weather Provider 0.7.0 upgrade,
+  Node 24 requirement for the complete chain and separate access approvals.
+- Keep HTTP contract 0.1 and original dataset identities unchanged. No decoder,
+  processor dispatch or subsetting service is bundled.
+
 ## 0.1.0-beta.1 — 2026-10-21
 
 - First public beta of the format-agnostic `forecastDatasets` catalogue and original-content provider; experimental contract 0.1.

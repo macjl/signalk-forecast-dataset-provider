@@ -125,7 +125,7 @@ export const openApi = {
   openapi: '3.0.3',
   info: {
     title: 'Forecast Dataset Provider',
-    version: '0.1.0-beta.1',
+    version: '0.1.0',
     description:
       'Experimental contract 0.1. Original-content catalogue; no GRIB/Zarr decoding or subset processor is bundled.'
   },

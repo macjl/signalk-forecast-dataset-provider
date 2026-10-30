@@ -2,7 +2,7 @@
 
 Signal K Resource Provider for **`forecastDatasets`**: a shared catalogue of persistent, immutable forecast content. Downloaders and receivers publish original bytes; routing, weather and navigation clients discover and retrieve them without depending on private directories.
 
-**Version 0.1.0-beta.1 is the catalogue foundation.** It implements staged multi-asset publication (including unknown-size streams), live publication progress, SHA-256 content versions, resumable publication after restart, verified-inventory enrichment, filtered discovery, HTTP Range/HEAD/ETag access, deletion coordination and v2 resource deltas. No GRIB/Zarr decoder is bundled. Formats are declared, not detected or validated meteorologically.
+**Version 0.1.0 is the first stable catalogue release.** It implements staged multi-asset publication (including unknown-size streams), live publication progress, SHA-256 content versions, resumable publication after restart, verified-inventory enrichment, filtered discovery, HTTP Range/HEAD/ETag access, deletion coordination and v2 resource deltas. No GRIB/Zarr decoder is bundled. Formats are declared, not detected or validated meteorologically.
 
 The architecture and examples come from the [project outline](https://github.com/macjl/signalk-grib-resources/blob/c289876e4d4e5faadbb6779d865d7aa21a0d9822/docs/project-outline.md). The wire contract selected for this prototype is documented in [contract 0.1](docs/contract-v0.1.md); it is experimental, not an adopted Signal K specification.
 
@@ -10,13 +10,15 @@ The architecture and examples come from the [project outline](https://github.com
 
 Requires **Signal K server 2.34 or later within 2.x** and Node.js 20.19 or later for this plugin (the server may require a newer Node version). The target server for integration verification is 2.34.0.
 
-The beta channel is separate from `latest`. To install it from the Signal K configuration directory:
+See the [coordinated upgrade guide](docs/upgrading.md) before upgrading the downloader and Weather Provider from local-file releases. The complete chain requires Node.js 24+.
+
+Install the stable release from the Signal K App Store or from its configuration directory:
 
 ```sh
-npm install signalk-forecast-dataset-provider@beta
+npm install signalk-forecast-dataset-provider@latest
 ```
 
-Install a built npm archive in the Signal K configuration directory, then restart the server and enable **Forecast Dataset Provider** in Plugin Config. Until a registry release exists, build from source:
+Restart the server and enable **Forecast Dataset Provider** in Plugin Config. To build a local archive from source:
 
 ```sh
 npm ci
@@ -24,7 +26,7 @@ npm run check
 npm pack
 ```
 
-Install the resulting archive using the server's normal plugin installation workflow, for example `npm install /path/to/signalk-forecast-dataset-provider-0.1.0-beta.1.tgz` from its configuration directory. No npm release is required for local testing.
+Install the resulting archive using the server's normal plugin installation workflow, for example `npm install /path/to/signalk-forecast-dataset-provider-0.1.0.tgz` from its configuration directory. No npm release is required for local testing.
 
 The default storage location is `<plugin data directory>/catalogue`. An optional absolute `storageDirectory` can be configured. Use a local filesystem supporting hard links and atomic rename, with a single catalogue writer. Limits are configurable for asset bytes, dataset bytes, asset count and unfinished publications. They are per-publication limits, not an automatic total-disk-quota policy. Unfinished publications persist until resumed or explicitly aborted.
 

@@ -5,9 +5,10 @@ GRIB Downloader and History Explorer): publish a GitHub Release, or manually run
 `.github/workflows/publish.yml`. Publication uses npm trusted publishing (OIDC)
 with provenance; no `NPM_TOKEN` GitHub secret is used.
 
-The package has been bootstrapped on npm as `0.0.0-stage`. The first actual plugin
-release is prepared as `0.1.0-beta.1`, using the `beta` dist-tag. The earlier
-0.1.0/0.1.1/0.1.2 numbers identify unpublished local development snapshots.
+The package and trusted publisher already exist. Release **0.1.0** is the first
+stable version and publishes to `latest`; the earlier public release was
+`0.1.0-beta.1`. Older 0.1.0/0.1.1/0.1.2 entries were unpublished development
+snapshots. See [the coordinated upgrade guide](docs/upgrading.md).
 
 ## First publication setup
 
@@ -58,8 +59,8 @@ and [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/
 
 ## Prepare the real plugin version
 
-The first beta version is **0.1.0-beta.1**. For subsequent releases, decide the
-new version before tagging.
+The first stable version is **0.1.0**. Decide the new version before tagging
+subsequent releases.
 Keep `package.json`, `package-lock.json`, the OpenAPI info version and changelog
 consistent if changing it. The resource contract stays `0.1` independently of
 the npm package version.
