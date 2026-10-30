@@ -18,7 +18,7 @@ Install the stable release from the Signal K App Store or from its configuration
 npm install signalk-forecast-dataset-provider@latest
 ```
 
-Restart the server and enable **Forecast Dataset Provider** in Plugin Config. To build a local archive from source:
+Restart the server. From version **0.1.1**, fresh installations enable **Forecast Dataset Provider** automatically. Signal K preserves an existing explicit disabled setting: for an already installed but disabled provider, enable it once in Plugin Config and save. To build a local archive from source:
 
 ```sh
 npm ci

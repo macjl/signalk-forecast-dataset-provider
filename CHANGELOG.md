@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-10-31
+
+- Enable Forecast Dataset Provider by default on fresh installations, so the
+  catalogue is available without a separate activation step.
+- Preserve existing explicit enabled/disabled settings through Signal K's
+  standard activation behaviour. Already-disabled installations still require
+  enabling the provider once in Plugin Config.
+- Keep storage, permissions and HTTP contract 0.1 unchanged.
+
 ## 0.1.0 — 2026-10-30
 
 - First stable catalogue release, promoting the tested streaming publication,
