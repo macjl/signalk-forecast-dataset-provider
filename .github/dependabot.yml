@@ -5,8 +5,16 @@ updates:
     schedule:
       interval: weekly
     groups:
+      express-major:
+        patterns: ['express', '@types/express']
+        update-types: ['major']
       npm-dependencies:
         patterns: ['*']
+        update-types: ['minor', 'patch']
+    ignore:
+      # Match the oldest supported runtime, not the newest Node release.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:

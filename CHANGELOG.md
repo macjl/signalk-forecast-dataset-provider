@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Separate major dependency migrations from routine Dependabot updates; keep
+  Express and its types together and Node.js types on the supported baseline.
+
 - Require Node.js 22 or later, dropping Node.js 20 support.
 - Align Node.js development types with version 22 and test on Node.js 22/24.
 
