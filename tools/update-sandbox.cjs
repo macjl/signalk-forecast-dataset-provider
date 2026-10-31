@@ -87,7 +87,8 @@ assert.equal(
   require(
     require.resolve('express/package.json', { paths: [staging] })
   ).version.split('.')[0],
-  '4'
+  '5',
+  'Install the provider dependencies first; do not reuse the server Express 4 dependency'
 )
 execFileSync('chown', ['-R', 'node:node', staging])
 const previous = path.join(

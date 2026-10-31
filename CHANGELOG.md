@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade Express to 5 and validate named route parameters explicitly. Cover
+  the HTTP lifecycle against both Express 4 hosts and Express 5 hosts.
+- Update Signal K development API types to 2.35 and the OpenAPI validator to 13.
+
 - Upgrade to TypeScript 7 with Node16 module resolution, preserving CommonJS
   output for Signal K plugin loading.
 

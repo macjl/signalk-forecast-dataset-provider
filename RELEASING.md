@@ -77,6 +77,8 @@ helpers, local configuration and credentials must not be included. Compilation
 runs during `prepack`, so the installed App Store package needs no install/build
 script. `prepublishOnly` reruns the full checks before a real publish.
 
+Development and release checks require Node 22.19 or later (the OpenAPI
+validator requires this version baseline); installed runtime code supports Node 22+.
 The local CI checks Node 22/24. The separate Signal K reusable CI follows the
 other plugins and adds Linux/ARM64/macOS/Windows plus real-server integration.
 Those hosted checks only run after pushing; local success does not claim they

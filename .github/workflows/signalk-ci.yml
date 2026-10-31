@@ -14,5 +14,6 @@ jobs:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
     with:
       enable-signalk-integration: true
+      signalk-server-versions: '["2.34.0", "2.35.1"]'
       node-versions: '["22", "24"]'
       format-check-command: npm run format:check
