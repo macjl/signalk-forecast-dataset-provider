@@ -28,7 +28,7 @@ const pkg = JSON.parse(
   })
 )
 assert.equal(pkg.name, name)
-assert.equal(pkg.version, '0.1.1')
+assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[\da-zA-Z.-]+)?$/)
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 const backup = path.join(
   root,
@@ -87,7 +87,8 @@ assert.equal(
   require(
     require.resolve('express/package.json', { paths: [staging] })
   ).version.split('.')[0],
-  '4'
+  '5',
+  'Install the provider dependencies first; do not reuse the server Express 4 dependency'
 )
 execFileSync('chown', ['-R', 'node:node', staging])
 const previous = path.join(

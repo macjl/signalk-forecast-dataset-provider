@@ -1,10 +1,14 @@
 # Coordinated forecast-plugin upgrade
 
-Stable versions: Forecast Dataset Provider **0.1.0**, GRIB Downloader **0.4.0**,
+The first coordinated stable migration used: Forecast Dataset Provider **0.1.0**, GRIB Downloader **0.4.0**,
 GRIB Weather Provider **0.7.0**, Forecast Dataset Browser **0.1.0**.
 The catalogue HTTP contract remains **0.1**; it is not an adopted Signal K standard.
 
 ## Requirements and upgrade from local-file releases
+
+Provider 0.2.0 requires Node.js 22+ and preserves the same catalogue storage and
+HTTP contract. It does not require a dataset or configuration migration. Use the
+latest compatible releases when applying the historical migration steps below.
 
 The complete chain requires **Node.js 24+** (the Weather Provider's ecCodes
 WebAssembly decoder needs memory64) and **Signal K 2.34+ within 2.x**.

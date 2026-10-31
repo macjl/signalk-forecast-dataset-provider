@@ -54,3 +54,24 @@ Update/rollback note: committed contract 0.1 datasets retain the same storage an
 Plugin Config now exposes `maxAssetMiB: 2048` and `maxDatasetMiB: 8192`, with explicit MiB labels (1,048,576 bytes). Effective default byte limits and byte-based HTTP/index/progress semantics are unchanged. No configuration migration or compatibility aliases are included for the unpublished prototype. Only this sandbox plugin's settings were manually adjusted through its configuration API.
 
 The updated 0.1.2 archive was installed with a backup at `local-packages/forecast-provider-before-update-2026-10-21T18-45-50-384Z`. The actual `/plugins` schema and saved settings were verified. The 45 other plugin configurations, enable/debug flags and both existing dataset content versions remained unchanged. The provider's streaming/recovery/transport integration helper passed again and removed its synthetic data. Local checks pass 27 tests, including unit conversion, invalid configuration and enforcement of a MiB-configured limit during an upload.
+
+## Dependency migration verification — 2026-10-31
+
+The provider now requires Node.js 22+. Local checks passed on Node.js 22.23.4
+and 24.22.2 with TypeScript 7, Express 5 and the updated OpenAPI validator.
+The 29 top-level tests include a second execution of the HTTP suite using an
+Express 4 host with the provider's Express 5 JSON middleware.
+
+A separate Signal K 2.35.1 instance used Node.js 24.22.1 and the server's
+Express 4.22.3. It ran on a free port with its own temporary configuration,
+catalogue and test accounts, using the packed provider with production-only
+dependencies. Fresh-install activation, reader/write permissions, anonymous
+access rejection, unknown-size streaming, commit, core Resource API discovery
+and filtering, Range, HEAD, ETag and deletion passed. The instance was stopped
+and its temporary configuration removed. The existing sandbox configuration,
+installed plugins and datasets were not changed.
+
+The targeted sandbox install/update helpers require Express 5 to be available
+for the provider. They deliberately do not resolve dependencies; do not use
+them to reuse the server's Express 4 installation during this migration. Use
+a normal package installation that installs the provider's dependencies.

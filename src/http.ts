@@ -10,7 +10,7 @@ import type { PluginRouter } from '@signalk/server-api'
 import { API_ROOT, CONTRACT_VERSION, PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { Catalogue, digest } from './storage'
 import { listResources } from './discovery'
-import { ApiError, ensure } from './validation'
+import { ApiError, ensure, identifier } from './validation'
 
 type GetStore = () => Catalogue
 const etag = (value: unknown) => `"${digest(value)}"`
@@ -138,7 +138,7 @@ export function registerRoutes(
     '/datasets/:id',
     wrap((req, res) => {
       const store = getStore()
-      json(req, res, store.resource(store.get(req.params.id!)))
+      json(req, res, store.resource(store.get(identifier(req.params.id))))
     })
   )
   read.get(
@@ -148,7 +148,9 @@ export function registerRoutes(
       json(
         req,
         res,
-        store.resource(store.get(req.params.id!, req.params.version!))
+        store.resource(
+          store.get(identifier(req.params.id), identifier(req.params.version))
+        )
       )
     })
   )
@@ -157,8 +159,8 @@ export function registerRoutes(
     wrap(async (req, res) => {
       const store = getStore()
       const { record, inventory } = await store.readInventory(
-        req.params.id!,
-        req.params.version!
+        identifier(req.params.id),
+        identifier(req.params.version)
       )
       json(req, res, {
         datasetId: record.id,
@@ -177,9 +179,9 @@ export function registerRoutes(
     '/datasets/:id/versions/:version/assets/:asset',
     wrap(async (req, res) => {
       const opened = await getStore().openAsset(
-        req.params.id!,
-        req.params.version!,
-        req.params.asset!
+        identifier(req.params.id),
+        identifier(req.params.version),
+        identifier(req.params.asset)
       )
       try {
         const { asset, handle } = opened
@@ -231,7 +233,10 @@ export function registerRoutes(
   )
 
   const begin = wrap(async (req, res) => {
-    const stage = await getStore().begin(req.body, req.params.id)
+    const stage = await getStore().begin(
+      req.body,
+      req.params.id === undefined ? undefined : identifier(req.params.id)
+    )
     res.status(201).location(`${API_ROOT}/publications/${stage.id}`).json(stage)
   })
   write.post('/publications', body, begin)
@@ -247,7 +252,7 @@ export function registerRoutes(
     wrap((req, res) => {
       res
         .set('Cache-Control', 'no-store')
-        .json(getStore().publication(req.params.publication!))
+        .json(getStore().publication(identifier(req.params.publication)))
     })
   )
   write.put(
@@ -263,7 +268,7 @@ export function registerRoutes(
           'RAW_UPLOAD_REQUIRED',
           'Upload unencoded application/octet-stream bytes'
         )
-      const stage = getStore().publication(req.params.publication!)
+      const stage = getStore().publication(identifier(req.params.publication))
       const expected = stage.declaration.assets.find(
         (a) => a.id === req.params.asset
       )
@@ -288,8 +293,8 @@ export function registerRoutes(
       }
       req.setTimeout(120000, () => req.destroy(new Error('Upload timed out')))
       const asset = await getStore().upload(
-        req.params.publication!,
-        req.params.asset!,
+        identifier(req.params.publication),
+        identifier(req.params.asset),
         req
       )
       res.status(201).json(asset)
@@ -299,7 +304,7 @@ export function registerRoutes(
     '/publications/:publication/commit',
     wrap(async (req, res) => {
       const store = getStore()
-      const record = await store.commit(req.params.publication!)
+      const record = await store.commit(identifier(req.params.publication))
       res
         .status(201)
         .location(
@@ -311,14 +316,14 @@ export function registerRoutes(
   write.delete(
     '/publications/:publication',
     wrap(async (req, res) => {
-      await getStore().abort(req.params.publication!)
+      await getStore().abort(identifier(req.params.publication))
       res.status(204).end()
     })
   )
   write.delete(
     '/datasets/:id',
     wrap(async (req, res) => {
-      await getStore().remove(req.params.id!)
+      await getStore().remove(identifier(req.params.id))
       res.status(204).end()
     })
   )
@@ -337,7 +342,10 @@ export function registerRoutes(
           'If-Match with the current dataset ETag is required'
         )
       const store = getStore()
-      const record = store.get(req.params.id!, req.params.version!)
+      const record = store.get(
+        identifier(req.params.id),
+        identifier(req.params.version)
+      )
       if (value !== etag(store.resource(record)))
         throw new ApiError(
           412,

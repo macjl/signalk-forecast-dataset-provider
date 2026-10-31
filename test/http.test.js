@@ -7,7 +7,10 @@ const path = require('node:path')
 const { once } = require('node:events')
 const { Readable } = require('node:stream')
 const { createHash } = require('node:crypto')
-const express = require('express')
+const express =
+  process.env.FORECAST_TEST_EXPRESS === '4'
+    ? require('express4')
+    : require('express')
 const createPlugin = require('../dist')
 const { PLUGIN_ID, API_ROOT, RESOURCE_TYPE } = require('../dist/types')
 const { byteRange } = require('../dist/http')

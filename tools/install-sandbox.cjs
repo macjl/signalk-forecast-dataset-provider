@@ -77,7 +77,7 @@ assert.equal(installed.name, name)
 assert.ok(
   require(
     require.resolve('express/package.json', { paths: [destination] })
-  ).version.startsWith('4.')
+  ).version.startsWith('5.')
 )
 execFileSync('chown', ['-R', 'node:node', destination])
 const packages = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
