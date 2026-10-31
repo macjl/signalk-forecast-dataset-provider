@@ -28,7 +28,7 @@ const pkg = JSON.parse(
   })
 )
 assert.equal(pkg.name, name)
-assert.equal(pkg.version, '0.1.1')
+assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[\da-zA-Z.-]+)?$/)
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 const backup = path.join(
   root,

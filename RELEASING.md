@@ -5,15 +5,16 @@ GRIB Downloader and History Explorer): publish a GitHub Release, or manually run
 `.github/workflows/publish.yml`. Publication uses npm trusted publishing (OIDC)
 with provenance; no `NPM_TOKEN` GitHub secret is used.
 
-The package and trusted publisher already exist. Release **0.1.0** is the first
-stable version and publishes to `latest`; the earlier public release was
-`0.1.0-beta.1`. Older 0.1.0/0.1.1/0.1.2 entries were unpublished development
-snapshots. See [the coordinated upgrade guide](docs/upgrading.md).
+The package and trusted publisher already exist. Version **0.2.0** is a stable
+release published to `latest`. It requires Node.js 22+ and keeps HTTP contract
+0.1. Version 0.1.0 was the first stable release, followed by 0.1.1. The dated
+prototype entries under “Development snapshots” in the changelog were never
+published. See [the coordinated upgrade guide](docs/upgrading.md).
 
 ## First publication setup
 
 The package must exist before an npm trusted publisher can be configured. The
-existing `0.0.0-stage` bootstrap already satisfies this: **do not repeat the
+existing `0.0.1` bootstrap already satisfies this: **do not repeat the
 bootstrap for this package**. For a new package, as with History Explorer,
 bootstrap an **empty** placeholder outside its checkout.
 These commands publish publicly and must be run deliberately by the maintainer:
@@ -59,8 +60,8 @@ and [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/
 
 ## Prepare the real plugin version
 
-The first stable version is **0.1.0**. Decide the new version before tagging
-subsequent releases.
+The release prepared here is **0.2.0**. Decide the new version before tagging
+each subsequent release.
 Keep `package.json`, `package-lock.json`, the OpenAPI info version and changelog
 consistent if changing it. The resource contract stays `0.1` independently of
 the npm package version.
@@ -101,7 +102,19 @@ provenance. The OIDC path cannot be fully validated by a local dry run: npm must
 recognise the configured GitHub workflow. Tighten npm publishing access only
 after that first successful OIDC publication, as in the other plugins.
 
-## Preparation checks (2026-10-21)
+## Validation for 0.2.0
+
+The migration passed 29 top-level tests on Node.js 22/24, including an additional
+execution of the HTTP suite with an Express 4 host and Express 5 middleware.
+Hosted CI passed on Linux x64/ARM64, macOS and Windows, with integration against
+Signal K 2.34.0 and 2.35.1. The existing sandbox deployment also passed the
+publication, recovery, inventory, permissions and original-content transport
+checks, and the maintainer confirmed acceptance. Production dependency audit
+reported zero vulnerabilities. The release commit is checked again before
+publication; inspect its hosted checks rather than assuming earlier results
+apply to later changes.
+
+## Historical preparation checks (2026-10-21)
 
 The 27 local tests, formatting and TypeScript checks passed. `npm publish --dry-run`
 completed without publishing; the inspected archive contains 24 files, including

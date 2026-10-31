@@ -1,19 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-31
 
+- Require Node.js 22 or later, dropping Node.js 20 support. Align Node.js
+  development types with version 22 and test on Node.js 22/24.
 - Upgrade Express to 5 and validate named route parameters explicitly. Cover
   the HTTP lifecycle against both Express 4 hosts and Express 5 hosts.
-- Update Signal K development API types to 2.35 and the OpenAPI validator to 13.
-
 - Upgrade to TypeScript 7 with Node16 module resolution, preserving CommonJS
   output for Signal K plugin loading.
-
+- Update Signal K development API types to 2.35 and the OpenAPI validator to 13.
+  Development checks require Node.js 22.19+; installed runtime code supports 22+.
 - Separate major dependency migrations from routine Dependabot updates; keep
   Express and its types together and Node.js types on the supported baseline.
-
-- Require Node.js 22 or later, dropping Node.js 20 support.
-- Align Node.js development types with version 22 and test on Node.js 22/24.
+- Keep storage, settings, dataset identities and HTTP contract 0.1 unchanged.
+- Verify Signal K 2.34.0/2.35.1 integration and the existing sandbox deployment.
 
 ## 0.1.1 — 2026-10-31
 
