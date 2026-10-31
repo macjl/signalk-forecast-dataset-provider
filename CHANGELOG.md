@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Upgrade to TypeScript 7 with Node16 module resolution, preserving CommonJS
+  output for Signal K plugin loading.
+
 - Separate major dependency migrations from routine Dependabot updates; keep
   Express and its types together and Node.js types on the supported baseline.
 
