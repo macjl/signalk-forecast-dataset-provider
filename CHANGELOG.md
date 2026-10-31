@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Require Node.js 22 or later, dropping Node.js 20 support.
+- Align Node.js development types with version 22 and test on Node.js 22/24.
+
 ## 0.1.1 — 2026-10-31
 
 - Enable Forecast Dataset Provider by default on fresh installations, so the

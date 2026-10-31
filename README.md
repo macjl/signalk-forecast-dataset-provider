@@ -8,7 +8,7 @@ The architecture and examples come from the [project outline](https://github.com
 
 ## Install
 
-Requires **Signal K server 2.34 or later within 2.x** and Node.js 20.19 or later for this plugin (the server may require a newer Node version). The target server for integration verification is 2.34.0.
+Requires **Signal K server 2.34 or later within 2.x** and Node.js 22 or later for this plugin. The target server for integration verification is 2.34.0.
 
 See the [coordinated upgrade guide](docs/upgrading.md) before upgrading the downloader and Weather Provider from local-file releases. The complete chain requires Node.js 24+.
 
