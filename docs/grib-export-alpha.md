@@ -53,6 +53,8 @@ Input and output are each limited to 1 GiB. Results expire after 20 minutes.
 Restarting the provider discards its temporary exports. A caller that wants to
 keep a dataset can submit it via the existing publication API.
 
-The same endpoint can serve remote acquisition, local route calculations,
-and file export for applications such as OpenCPN. The sandbox provides a
-GRIB Processor webapp and HTTP API for these tests.
+The same endpoint can serve remote acquisition, local route calculations, and
+file export for clients such as OpenCPN. A client submits the request, waits
+for completion, and retrieves the file through the API. Assembly and cropping
+only create temporary results. To add one to the catalogue, a client must
+explicitly stage, upload and commit a publication.
