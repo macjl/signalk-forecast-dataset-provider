@@ -42,7 +42,7 @@ function createPlugin(app: ServerAPI): Plugin {
         const dataDir = app.getDataDirPath()
         const processing = new Processing(
           path.dirname(dataDir),
-          path.join(dataDir, 'temporary-grib-exports'),
+          path.join(root, 'processing-work'),
           (message) => app.error(message)
         )
         const candidate = new Catalogue(
@@ -72,7 +72,11 @@ function createPlugin(app: ServerAPI): Plugin {
               )
             }
           },
-          (record) => processing.capabilities(record),
+          (record) =>
+            processing.capabilities(
+              record,
+              Math.min(limits.maxAssetBytes, limits.maxDatasetBytes)
+            ),
           (message) => app.error(message)
         )
         await candidate.init()

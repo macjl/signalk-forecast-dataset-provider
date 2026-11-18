@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { Catalogue } from './storage'
+import { canonical, type Catalogue } from './storage'
 import { API_ROOT, type Bounds, type Field, type Version } from './types'
 import {
   ApiError,
@@ -30,6 +29,8 @@ type Capability = {
   operation: 'export'
   output: { format: 'grib2'; layout: 'single-file' }
   selectors: string[]
+  fields?: Field[]
+  forecastInterval?: { stepSeconds: number; maxHours: number }
 }
 interface Processor {
   id: string
@@ -62,32 +63,50 @@ interface Job {
   error?: string
 }
 
-function processingRequest(value: unknown): {
+function processingRequest(
+  value: unknown,
+  capability: Capability
+): {
   selection: Selection
   lifetime: number | null
 } {
-  const input = object(value, 'export request')
+  const input = object(value === undefined ? {} : value, 'export request')
   ensure(
     Object.keys(input).every((key) =>
       ['operation', 'output', 'selection', 'expiresInSeconds'].includes(key)
     ),
     'Unknown export request option'
   )
-  ensure(input.operation === 'export', 'Expected operation export')
-  const output = object(input.output, 'export output')
   ensure(
-    Object.keys(output).length === 2 &&
-      output.format === 'grib2' &&
-      output.layout === 'single-file',
-    'Expected single-file GRIB2 output'
+    input.operation === undefined || input.operation === capability.operation,
+    'Expected operation export'
   )
-  const selectors = object(input.selection ?? {}, 'selection')
+  if (input.output !== undefined) {
+    const output = object(input.output, 'export output')
+    ensure(
+      Object.keys(output).length === 2 &&
+        output.format === capability.output.format &&
+        output.layout === capability.output.layout,
+      'Expected single-file GRIB2 output'
+    )
+  }
+  const selectors = object(
+    input.selection === undefined ? {} : input.selection,
+    'selection'
+  )
   ensure(
     Object.keys(selectors).every((key) =>
       ['bbox', 'fields', 'from', 'to'].includes(key)
     ),
     'Unknown export selector'
   )
+  if (Object.keys(selectors).some((key) => !capability.selectors.includes(key)))
+    throw new ApiError(
+      422,
+      'UNSUPPORTED_SELECTION',
+      'The dataset does not support the requested selectors'
+    )
+
   const selection: Selection = {}
   if (selectors.bbox !== undefined) {
     const box = bounds(selectors.bbox)
@@ -98,35 +117,30 @@ function processingRequest(value: unknown): {
     selection.bbox = box
   }
   if (selectors.fields !== undefined) {
-    const requested = fields(selectors.fields)
-    ensure(
-      requested.length > 0 && requested.length <= 3,
-      'Select one to three supported fields'
-    )
-    for (const field of requested) {
-      const wind = ['eastward_wind', 'northward_wind'].includes(field.parameter)
-      ensure(
-        wind || field.parameter === 'air_pressure_at_mean_sea_level',
-        'Supported fields are eastward_wind, northward_wind and air_pressure_at_mean_sea_level'
+    const wanted = fields(selectors.fields)
+    ensure(wanted.length > 0, 'Select at least one field')
+    const selected = new Map<string, Field>()
+    for (const field of wanted) {
+      const matches = (capability.fields ?? []).filter(
+        (candidate) =>
+          candidate.parameter === field.parameter &&
+          (!field.level ||
+            (field.level.type === candidate.level?.type &&
+              field.level.value === candidate.level.value &&
+              (!field.level.unit || field.level.unit === candidate.level.unit)))
       )
-      ensure(
-        !field.level ||
-          (wind &&
-            field.level.type === 'heightAboveGround' &&
-            field.level.value === 10 &&
-            field.level.unit === 'm'),
-        'Only the 10 m wind level and mean sea-level pressure are supported'
-      )
+      if (matches.length !== 1)
+        throw new ApiError(
+          422,
+          'UNSUPPORTED_FIELD',
+          'Choose one of the parameter and level pairs advertised for this dataset'
+        )
+      const match = matches[0]!
+      selected.set(canonical(match), match)
     }
-    const names = [...new Set(requested.map((field) => field.parameter))].sort()
-    selection.fields = names.map((parameter) =>
-      parameter === 'air_pressure_at_mean_sea_level'
-        ? { parameter }
-        : {
-            parameter,
-            level: { type: 'heightAboveGround', value: 10, unit: 'm' }
-          }
-    )
+    selection.fields = [...selected.keys()]
+      .sort()
+      .map((key) => selected.get(key)!)
   }
   ensure(
     (selectors.from === undefined) === (selectors.to === undefined),
@@ -134,17 +148,24 @@ function processingRequest(value: unknown): {
   )
   if (selectors.from !== undefined) {
     ensure(selection.fields, 'A forecast interval requires explicit fields')
+    const interval = capability.forecastInterval
+    if (!interval)
+      throw new ApiError(
+        422,
+        'UNSUPPORTED_SELECTION',
+        'This export profile does not support a forecast interval'
+      )
     const from = date(selectors.from, 'from')
     const to = date(selectors.to, 'to')
-    const hour = 3600_000
+    const step = interval.stepSeconds * 1000
     const first = Date.parse(from)
     const last = Date.parse(to)
     ensure(
-      first % hour === 0 &&
-        last % hour === 0 &&
+      first % step === 0 &&
+        last % step === 0 &&
         last >= first &&
-        last - first <= 51 * hour,
-      'Choose a forward interval of at most 51 hours on whole UTC hours'
+        last - first <= interval.maxHours * 3600_000,
+      `Choose a forward interval of at most ${interval.maxHours} hours aligned to ${interval.stepSeconds}-second UTC steps`
     )
     selection.from = from
     selection.to = to
@@ -185,13 +206,29 @@ export class Processing {
     return Boolean(this.processor)
   }
 
-  capabilities(record: Version) {
-    return this.processor?.capabilities(record) ?? []
+  capabilities(record: Version, outputLimit = byteLimit) {
+    if (record.assets.reduce((sum, asset) => sum + asset.size, 0) > byteLimit)
+      return []
+    return (this.processor?.capabilities(record) ?? []).map((capability) => ({
+      ...capability,
+      href: `${API_ROOT}/datasets/${record.id}/versions/${record.version}/requests`,
+      maxInputBytes: byteLimit,
+      maxOutputBytes: Math.min(byteLimit, outputLimit)
+    }))
   }
 
   describe(job: Job, catalogue: Catalogue) {
     const href = pathRoot + '/' + job.id
     const output = job.result
+    if (output) {
+      try {
+        catalogue.get(output.dataset.id, output.dataset.version)
+      } catch (error) {
+        if (!(error instanceof ApiError && error.code === 'DATASET_NOT_FOUND'))
+          throw error
+        return { id: job.id, state: 'expired', href }
+      }
+    }
     return {
       id: job.id,
       state: job.state,
@@ -223,17 +260,15 @@ export class Processing {
         'PROCESSOR_UNAVAILABLE',
         'Enable GRIB Processor and configure its Python runtime'
       )
-    const { selection, lifetime } = processingRequest(body)
     const record = catalogue.get(id, version)
-    const capability = processor.capabilities(record)[0]
-    if (
-      !capability ||
-      Object.keys(selection).some((key) => !capability.selectors.includes(key))
-    )
+    const capability = processor
+      .capabilities(record)
+      .find((item) => item.operation === 'export')
+    if (!capability)
       throw new ApiError(
         422,
         'UNSUPPORTED_SELECTION',
-        'This dataset does not support the requested GRIB export selectors'
+        'The dataset does not support GRIB export'
       )
     if (record.assets.reduce((sum, asset) => sum + asset.size, 0) > byteLimit)
       throw new ApiError(
@@ -241,6 +276,7 @@ export class Processing {
         'EXPORT_TOO_LARGE',
         'This prototype accepts at most 1 GiB of source assets'
       )
+    const { selection, lifetime } = processingRequest(body, capability)
     this.sweep()
     const key = JSON.stringify([
       owner,
@@ -306,15 +342,20 @@ export class Processing {
   ) {
     let publication: string | undefined
     try {
+      const maxBytes = Math.min(
+        byteLimit,
+        catalogue.limits.maxAssetBytes,
+        catalogue.limits.maxDatasetBytes
+      )
       const actual = await processor.run({
         selection: job.selection,
         paths: inputs.paths,
         output: job.output,
-        maxBytes: byteLimit,
+        maxBytes,
         signal: this.controller.signal
       })
       const { size } = await fs.stat(job.output)
-      ensure(size > 0 && size <= byteLimit, 'Invalid result size')
+      ensure(size > 0 && size <= maxBytes, 'Invalid result size')
       this.controller.signal.throwIfAborted()
       const sourceMetadata = {
         ...record.metadata,
@@ -351,11 +392,10 @@ export class Processing {
         assets: [{ id: 'forecast_grib2', size }]
       })
       publication = stage.id
-      await catalogue.upload(
-        stage.id,
-        'forecast_grib2',
-        createReadStream(job.output, { signal: this.controller.signal })
-      )
+      await catalogue.upload(stage.id, 'forecast_grib2', {
+        preparedPath: job.output,
+        signal: this.controller.signal
+      })
       this.controller.signal.throwIfAborted()
       const dataset = await catalogue.commit(stage.id)
       publication = undefined
@@ -365,9 +405,12 @@ export class Processing {
       job.state = 'failed'
       const workerError = (error as { stderr?: unknown })?.stderr
       const safe = typeof workerError === 'string' ? workerError.trim() : ''
-      job.error = /^[\w ,.;:'-]{1,220}$/.test(safe)
-        ? safe
-        : 'GRIB generation failed'
+      job.error =
+        error instanceof ApiError
+          ? error.message
+          : /^[\w ,.;:'-]{1,220}$/.test(safe)
+            ? safe
+            : 'GRIB generation failed'
       if (!this.controller.signal.aborted) this.log(job.error)
       if (publication)
         await catalogue

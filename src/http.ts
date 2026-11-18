@@ -104,6 +104,8 @@ export function registerRoutes(
           const known = error instanceof ApiError
           if (!known)
             report(error instanceof Error ? error.message : String(error))
+          if (known && error.code === 'PROCESSING_BUSY')
+            res.set('Retry-After', '1')
           res.removeHeader('ETag')
           res.removeHeader('Content-Length')
           res.set('Cache-Control', 'no-store').type('application/json')
@@ -273,9 +275,10 @@ export function registerRoutes(
         req.body
       )
       const status = processing.describe(job, getStore())
+      res.set('Cache-Control', 'no-store')
+      if (status.state === 'running') res.set('Retry-After', '1')
       res
-        .set('Cache-Control', 'no-store')
-        .status(202)
+        .status(status.state === 'running' ? 202 : 200)
         .location(status.href)
         .json(status)
     })
@@ -285,14 +288,13 @@ export function registerRoutes(
     '/requests/:request',
     wrap((req, res) => {
       const processing = jobs()
-      res
-        .set('Cache-Control', 'no-store')
-        .json(
-          processing.describe(
-            processing.get(owner(req), identifier(req.params.request)),
-            getStore()
-          )
-        )
+      const status = processing.describe(
+        processing.get(owner(req), identifier(req.params.request)),
+        getStore()
+      )
+      res.set('Cache-Control', 'no-store')
+      if (status.state === 'running') res.set('Retry-After', '1')
+      res.json(status)
     })
   )
 

@@ -610,3 +610,27 @@ test('an absolute expiry survives downtime and reclaims expired uncommitted data
     (error) => error.code === 'INVALID_EXPIRATION'
   )
 })
+
+test('a prepared worker asset keeps its file identity and the published receipt verifies its bytes', async (t) => {
+  const f = await fixture(t)
+  const workerFile = path.join(f.root, 'worker.grib2')
+  await fs.writeFile(workerFile, bytes)
+  const workerStat = await fs.stat(workerFile)
+  const publication = await f.store.begin(input())
+  const signal = new AbortController().signal
+  const asset = await f.store.upload(publication.id, 'part-0', {
+    preparedPath: workerFile,
+    signal
+  })
+  assert.equal(asset.sha256, createHash('sha256').update(bytes).digest('hex'))
+  const record = await f.store.commit(publication.id)
+  const opened = await f.store.openAsset(record.id, record.version, asset.id)
+  try {
+    const publishedStat = await opened.handle.stat()
+    assert.equal(publishedStat.ino, workerStat.ino)
+    assert.deepEqual(await opened.handle.readFile(), bytes)
+  } finally {
+    await opened.release()
+  }
+  await assert.rejects(fs.access(workerFile), { code: 'ENOENT' })
+})

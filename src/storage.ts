@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
-import { Transform, type Readable } from 'node:stream'
+import { Transform, Writable, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import {
   API_ROOT,
@@ -451,7 +451,13 @@ export class Catalogue {
     }
   }
 
-  async upload(id: string, assetId: string, stream: Readable): Promise<Asset> {
+  // Prepared files come from our own worker directory on this filesystem.
+  // Keep the public stream and private file paths on the same validation and durability code.
+  async upload(
+    id: string,
+    assetId: string,
+    input: Readable | { preparedPath: string; signal: AbortSignal }
+  ): Promise<Asset> {
     return this.exclusive(`publication:${identifier(id)}`, async () => {
       this.ready()
       identifier(assetId)
@@ -518,11 +524,28 @@ export class Catalogue {
         }
       })
       try {
-        await pipeline(
-          stream,
-          check,
-          createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
-        )
+        if ('preparedPath' in input) {
+          input.signal.throwIfAborted()
+          const stat = await fs.lstat(input.preparedPath)
+          ensure(stat.isFile(), 'Prepared asset must be a regular file')
+          await fs.rename(input.preparedPath, tmp)
+          await pipeline(
+            createReadStream(tmp),
+            check,
+            new Writable({
+              write(_chunk, _encoding, done) {
+                done()
+              }
+            }),
+            { signal: input.signal }
+          )
+        } else {
+          await pipeline(
+            input,
+            check,
+            createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
+          )
+        }
         ensure(
           bytes > 0 && (expected.size === undefined || bytes === expected.size),
           'Upload size does not match declaration'

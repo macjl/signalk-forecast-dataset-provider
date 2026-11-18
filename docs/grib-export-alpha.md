@@ -8,31 +8,40 @@ each other through a versioned, in-process registry scoped by Signal K data
 directory. Restarting either plugin makes new requests observe its current
 availability.
 
-Read the catalogue as usual. Each dataset version's
-`capabilities.operations` describes its export profile and supported selectors.
-Submit an authenticated write request to the plugin.
+## Client flow
 
-```http
-POST /plugins/signalk-forecast-dataset-provider/datasets/{id}/versions/{version}/requests
-Content-Type: application/json
-```
+1. Read the catalogue and find the export entry in `capabilities.operations`.
+   It includes the version-specific `href`, output format, selectors, and byte
+   limits. Spatial profiles also describe selectable fields and time steps.
+2. With a Signal K write identity, POST to that `href`. An empty request exports
+   all assets into one GRIB2. To limit the export, send a selection like this:
 
-```json
-{
-  "operation": "export",
-  "output": { "format": "grib2", "layout": "single-file" },
-  "selection": {
-    "bbox": [-6, 44, -1, 48],
-    "fields": [
-      { "parameter": "eastward_wind" },
-      { "parameter": "northward_wind" },
-      { "parameter": "air_pressure_at_mean_sea_level" }
-    ],
-    "from": "2026-11-09T15:00:00Z",
-    "to": "2026-11-10T03:00:00Z"
-  }
-}
-```
+   ```json
+   {
+     "selection": {
+       "bbox": [-6, 44, -1, 48],
+       "fields": [
+         { "parameter": "eastward_wind" },
+         { "parameter": "northward_wind" },
+         { "parameter": "air_pressure_at_mean_sea_level" }
+       ],
+       "from": "2026-11-09T15:00:00Z",
+       "to": "2026-11-10T03:00:00Z"
+     }
+   }
+   ```
+
+3. A `202` includes the job `href` and `Retry-After`. Poll the job with the same
+   identity. A repeated request can return `200` with a completed result
+   immediately. If a different job is occupying the worker, retry the
+   `429` after the indicated delay.
+4. On `complete`, download `result.assets[0].href` with the standard catalogue
+   API, including HTTP Range. `result.href` links to the exact dataset version.
+   Authorised catalogue readers can use the result with their own identity.
+
+The request and job routes are also described in the provider's OpenAPI.
+Requests may still explicitly include `"operation":"export"` and
+`"output":{"format":"grib2","layout":"single-file"}`.
 
 Omit selection to concatenate all complete GRIB2 messages, in ascending asset
 ID order, without repacking. The spatial selectors in this alpha support the
@@ -41,12 +50,15 @@ the 10 m level. If using an interval, both limits are inclusive UTC hours and
 every requested field must be present at every requested hour. The reported
 bounds give the exact envelope of retained grid points.
 
-Follow the job `href` from the 202 response and poll until `complete` or
-`failed`. On completion, `result` describes a normal catalogue dataset.
-Read `result.href` or download `result.assets[0].href` through the standard
-dataset API, including HTTP Range. The dataset retains source and processor
-provenance, size and SHA-256. `result.actual` describes the verified output
-message count and, where applicable, bounds and forecast times.
+The advertised fields describe the processor profile. When an original has no
+verified inventory, discover candidates by model and give the requested area
+and times to the export. The worker checks the actual messages and returns
+`failed` if it cannot satisfy the selection. Metadata, index and coverage
+filters on the catalogue retain their existing verified semantics.
+
+The result includes source and processor provenance, size and SHA-256.
+`result.actual` describes the output message count and, where applicable,
+bounds and forecast times.
 
 Exports expire 20 minutes after commit by default. Set top-level
 `expiresInSeconds` to choose another lifetime, or use
@@ -54,9 +66,12 @@ Exports expire 20 minutes after commit by default. Set top-level
 A published result survives a provider restart until its expiry. Job status
 and deduplication are kept in memory. Identical requests by the same identity
 can reuse an existing job or an accessible result. Authorised catalogue
-readers can discover and use the derived dataset.
+readers can discover and use the derived dataset. While the job is still
+available, its status is `expired` if the result has already left the catalogue.
 
 The sandbox alpha runs one export at a time. Input and output are each limited
-to 1 GiB. The processor's working file is removed once publication finishes.
+to 1 GiB. The worker writes in the catalogue filesystem. The provider moves the finished
+file into staging, reads it once to compute the checksum and commits it
+through the same publication path as an upload.
 The same endpoint can serve remote acquisition, local route calculations and
 file export for clients such as OpenCPN.

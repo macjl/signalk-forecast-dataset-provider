@@ -483,12 +483,16 @@ test('optional processor exports an immutable version for the requesting identit
     }
   })
   t.after(() => registry.delete(scope))
-  const response = await f.call(route, {
+  const advertised = (await f.provider.methods.listResources({}))[record.id]
+    .capabilities.operations[0]
+  assert.equal(advertised.href, API_ROOT + route)
+  assert.equal(advertised.maxInputBytes, 1024 ** 3)
+  const response = await f.call(advertised.href.slice(API_ROOT.length), {
     method: 'POST',
-    json,
     role: 'readwrite'
   })
   assert.equal(response.status, 202)
+  assert.equal(response.headers.get('retry-after'), '1')
   let job = await response.json()
   const jobPath = job.href.slice(API_ROOT.length)
   assert.equal((await f.call(jobPath, { role: 'readonly' })).status, 404)
@@ -526,6 +530,7 @@ test('optional processor exports an immutable version for the requesting identit
     json,
     role: 'readwrite'
   })
+  assert.equal(repeated.status, 200)
   assert.equal((await repeated.json()).id, job.id)
   const requested = await f.call(route, {
     method: 'POST',
