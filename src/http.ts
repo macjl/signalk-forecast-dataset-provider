@@ -191,7 +191,9 @@ export function registerRoutes(
         res.set({
           ETag: tag,
           'Accept-Ranges': 'bytes',
-          'Cache-Control': 'private, max-age=31536000, immutable, no-transform',
+          'Cache-Control': opened.expiresAt
+            ? 'private, no-store, no-transform'
+            : 'private, max-age=31536000, immutable, no-transform',
           'Content-Type': asset.mediaType,
           'X-Content-Type-Options': 'nosniff',
           'Content-Disposition': `attachment; filename="${asset.id}"`
@@ -270,7 +272,7 @@ export function registerRoutes(
         identifier(req.params.version),
         req.body
       )
-      const status = processing.describe(job)
+      const status = processing.describe(job, getStore())
       res
         .set('Cache-Control', 'no-store')
         .status(202)
@@ -287,64 +289,10 @@ export function registerRoutes(
         .set('Cache-Control', 'no-store')
         .json(
           processing.describe(
-            processing.get(owner(req), identifier(req.params.request))
+            processing.get(owner(req), identifier(req.params.request)),
+            getStore()
           )
         )
-    })
-  )
-
-  read.get(
-    '/requests/:request/data',
-    wrap(async (req, res) => {
-      const { handle, result, release } = await jobs().open(
-        owner(req),
-        identifier(req.params.request)
-      )
-      try {
-        const tag = `"sha256-${result.sha256}"`
-        res.set({
-          ETag: tag,
-          'Accept-Ranges': 'bytes',
-          'Cache-Control': 'private, no-store, no-transform',
-          'Content-Type': 'application/octet-stream',
-          'X-Content-Type-Options': 'nosniff',
-          'Content-Disposition': 'attachment; filename="forecast.grib2"'
-        })
-        if (matches(req.get('If-None-Match'), tag)) {
-          res.status(304).end()
-          return
-        }
-        let range = { start: 0, end: result.size - 1 }
-        const requested = req.get('Range')
-        if (
-          requested &&
-          (!req.get('If-Range') || req.get('If-Range') === tag)
-        ) {
-          try {
-            range = byteRange(requested, result.size)
-          } catch (error) {
-            res.set('Content-Range', `bytes */${result.size}`)
-            throw error
-          }
-          res
-            .status(206)
-            .set(
-              'Content-Range',
-              `bytes ${range.start}-${range.end}/${result.size}`
-            )
-        }
-        res.set('Content-Length', String(range.end - range.start + 1))
-        if (req.method === 'HEAD') {
-          res.end()
-          return
-        }
-        await pipeline(
-          handle.createReadStream({ ...range, autoClose: false }),
-          res
-        )
-      } finally {
-        await release()
-      }
     })
   )
 

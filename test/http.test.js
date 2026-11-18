@@ -497,15 +497,29 @@ test('optional processor exports an immutable version for the requesting identit
     job = await (await f.call(jobPath, { role: 'readwrite' })).json()
   }
   assert.equal(job.state, 'complete')
+  const result = job.result
+  assert.notEqual(result.id, record.id)
+  assert.ok(result.expiresAt)
   assert.equal(
-    job.result.sha256,
+    result.assets[0].sha256,
     createHash('sha256').update(content).digest('hex')
   )
-  const data = await f.call(job.result.href.slice(API_ROOT.length), {
-    role: 'readwrite',
+  const listed = await f.provider.methods.listResources({})
+  assert.equal(listed[result.id].expiresAt, result.expiresAt)
+  const read = await f.call(result.href.slice(API_ROOT.length), {
+    role: 'readonly'
+  })
+  assert.equal(read.status, 200)
+  assert.deepEqual((await read.json()).provenance.source, {
+    id: record.id,
+    version: record.version
+  })
+  const data = await f.call(result.assets[0].href.slice(API_ROOT.length), {
+    role: 'readonly',
     headers: { Range: 'bytes=0-3' }
   })
   assert.equal(data.status, 206)
+  assert.match(data.headers.get('cache-control'), /no-store/)
   assert.equal(await data.text(), 'GRIB')
   const repeated = await f.call(route, {
     method: 'POST',
@@ -513,4 +527,28 @@ test('optional processor exports an immutable version for the requesting identit
     role: 'readwrite'
   })
   assert.equal((await repeated.json()).id, job.id)
+  const requested = await f.call(route, {
+    method: 'POST',
+    json: { ...json, expiresInSeconds: null },
+    role: 'readwrite'
+  })
+  assert.equal(requested.status, 202)
+  let durable = await requested.json()
+  for (
+    let attempt = 0;
+    durable.state === 'running' && attempt < 100;
+    attempt++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    durable = await (
+      await f.call(durable.href.slice(API_ROOT.length), { role: 'readwrite' })
+    ).json()
+  }
+  assert.equal(durable.state, 'complete')
+  assert.equal(durable.result.expiresAt, undefined)
+  assert.equal(
+    durable.result.version,
+    result.version,
+    'retention does not change byte identity'
+  )
 })

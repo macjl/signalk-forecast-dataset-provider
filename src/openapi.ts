@@ -94,6 +94,8 @@ const declaration = {
     metadata,
     requested: { type: 'object' },
     provenance: { type: 'object' },
+    expiresAt: { type: 'string', format: 'date-time' },
+    expiresInSeconds: { type: 'integer', minimum: 1, maximum: 31536000 },
     assets: {
       type: 'array',
       minItems: 1,
@@ -125,7 +127,7 @@ export const openApi = {
   openapi: '3.0.3',
   info: {
     title: 'Forecast Dataset Provider',
-    version: '0.3.0-alpha.1',
+    version: '0.3.0-alpha.2',
     description:
       'Experimental contract 0.1. Original-content catalogue with optional delegated GRIB2 export.'
   },

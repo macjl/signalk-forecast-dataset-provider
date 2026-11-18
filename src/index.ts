@@ -72,7 +72,8 @@ function createPlugin(app: ServerAPI): Plugin {
               )
             }
           },
-          (record) => processing.capabilities(record)
+          (record) => processing.capabilities(record),
+          (message) => app.error(message)
         )
         await candidate.init()
         await processing.init()

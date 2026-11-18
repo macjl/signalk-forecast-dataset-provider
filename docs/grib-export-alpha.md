@@ -2,7 +2,7 @@
 
 Enable the companion GRIB Processor plugin to expose the export capability on
 compatible forecast datasets. Forecast Dataset Provider receives the request,
-holds a read lease on the original version, and manages the temporary result.
+holds a read lease on the original version, and publishes a derived dataset.
 The GRIB processor runs ecCodes in a separate process. The plugins discover
 each other through a versioned, in-process registry scoped by Signal K data
 directory. Restarting either plugin makes new requests observe its current
@@ -41,20 +41,22 @@ the 10 m level. If using an interval, both limits are inclusive UTC hours and
 every requested field must be present at every requested hour. The reported
 bounds give the exact envelope of retained grid points.
 
-Follow the job `href` from the 202 response. Poll until `complete` or
-`failed`. Follow `result.href` to download a complete result using the same
-Signal K identity. The result includes byte size, SHA-256, provenance, expiry,
-and the actual message count, spatial bounds and forecast times when applicable.
-Use HTTP Range with the result ETag to resume a transfer before expiry.
-Identical requests from the same identity can reuse an existing job or result.
+Follow the job `href` from the 202 response and poll until `complete` or
+`failed`. On completion, `result` describes a normal catalogue dataset.
+Read `result.href` or download `result.assets[0].href` through the standard
+dataset API, including HTTP Range. The dataset retains source and processor
+provenance, size and SHA-256. `result.actual` describes the verified output
+message count and, where applicable, bounds and forecast times.
 
-The sandbox alpha supports one running job and at most four tracked jobs.
-Input and output are each limited to 1 GiB. Results expire after 20 minutes.
-Restarting the provider discards its temporary exports. A caller that wants to
-keep a dataset can submit it via the existing publication API.
+Exports expire 20 minutes after commit by default. Set top-level
+`expiresInSeconds` to choose another lifetime, or use
+`"expiresInSeconds": null` to keep the derived dataset without expiration.
+A published result survives a provider restart until its expiry. Job status
+and deduplication are kept in memory. Identical requests by the same identity
+can reuse an existing job or an accessible result. Authorised catalogue
+readers can discover and use the derived dataset.
 
-The same endpoint can serve remote acquisition, local route calculations, and
-file export for clients such as OpenCPN. A client submits the request, waits
-for completion, and retrieves the file through the API. Assembly and cropping
-only create temporary results. To add one to the catalogue, a client must
-explicitly stage, upload and commit a publication.
+The sandbox alpha runs one export at a time. Input and output are each limited
+to 1 GiB. The processor's working file is removed once publication finishes.
+The same endpoint can serve remote acquisition, local route calculations and
+file export for clients such as OpenCPN.

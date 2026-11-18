@@ -27,6 +27,8 @@ export interface Declaration {
   format: string
   producer: string
   metadata: Metadata
+  expiresAt?: string
+  expiresInSeconds?: number
   requested?: JsonObject
   provenance?: JsonObject
   assets: { id: string; size?: number; sha256?: string; mediaType?: string }[]
@@ -52,6 +54,7 @@ export interface Version {
   createdAt: string
   metadataRevision: number
   metadata: Metadata
+  expiresAt?: string
   requested?: JsonObject
   provenance?: JsonObject
   assets: Asset[]

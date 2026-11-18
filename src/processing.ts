@@ -1,14 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Catalogue } from './storage'
 import { API_ROOT, type Bounds, type Field, type Version } from './types'
-import { ApiError, bounds, date, ensure, fields, object } from './validation'
+import {
+  ApiError,
+  bounds,
+  date,
+  ensure,
+  expirySeconds,
+  fields,
+  object
+} from './validation'
 
 const registryKey = Symbol.for('macjl.forecast-datasets.processors.v1')
-const resultTtl = 20 * 60_000
+const jobTtl = 20 * 60_000
+const defaultLifetime = 20 * 60
 const byteLimit = 1024 ** 3
 const pathRoot = API_ROOT + '/requests'
 type Selection = { bbox?: Bounds; fields?: Field[]; from?: string; to?: string }
@@ -35,8 +44,7 @@ interface Processor {
   }): Promise<ActualSelection>
 }
 interface Result {
-  size: number
-  sha256: string
+  dataset: Version
   actual: ActualSelection
 }
 interface Job {
@@ -49,16 +57,19 @@ interface Job {
   selection: Selection
   output: string
   expires: number
-  readers: number
+  lifetime: number | null
   result?: Result
   error?: string
 }
 
-function processingSelection(value: unknown): Selection {
+function processingRequest(value: unknown): {
+  selection: Selection
+  lifetime: number | null
+} {
   const input = object(value, 'export request')
   ensure(
     Object.keys(input).every((key) =>
-      ['operation', 'output', 'selection'].includes(key)
+      ['operation', 'output', 'selection', 'expiresInSeconds'].includes(key)
     ),
     'Unknown export request option'
   )
@@ -138,14 +149,17 @@ function processingSelection(value: unknown): Selection {
     selection.from = from
     selection.to = to
   }
-  return selection
+  const lifetime =
+    input.expiresInSeconds === null
+      ? null
+      : expirySeconds(input.expiresInSeconds ?? defaultLifetime)
+  return { selection, lifetime }
 }
 
 export class Processing {
   private readonly controller = new AbortController()
   private readonly jobs = new Map<string, Job>()
   private readonly tasks = new Set<Promise<void>>()
-  private readonly activeReaders = new Set<Promise<void>>()
   private timer?: NodeJS.Timeout
 
   constructor(
@@ -175,25 +189,20 @@ export class Processing {
     return this.processor?.capabilities(record) ?? []
   }
 
-  describe(job: Job) {
+  describe(job: Job, catalogue: Catalogue) {
     const href = pathRoot + '/' + job.id
+    const output = job.result
     return {
       id: job.id,
       state: job.state,
       href,
       ...(job.error ? { error: job.error } : {}),
-      ...(job.result
+      ...(output
         ? {
             result: {
-              ...job.result,
-              href: href + '/data',
-              format: 'grib2',
-              expires: new Date(job.expires).toISOString(),
-              provenance: {
-                source: job.source,
-                processor: job.processor,
-                selection: job.selection
-              }
+              ...catalogue.resource(output.dataset),
+              href: `${API_ROOT}/datasets/${output.dataset.id}/versions/${output.dataset.version}`,
+              actual: output.actual
             }
           }
         : {})
@@ -214,7 +223,7 @@ export class Processing {
         'PROCESSOR_UNAVAILABLE',
         'Enable GRIB Processor and configure its Python runtime'
       )
-    const selection = processingSelection(body)
+    const { selection, lifetime } = processingRequest(body)
     const record = catalogue.get(id, version)
     const capability = processor.capabilities(record)[0]
     if (
@@ -238,6 +247,7 @@ export class Processing {
       id,
       version,
       selection,
+      lifetime,
       processor.id,
       processor.version
     ])
@@ -245,13 +255,26 @@ export class Processing {
       (job) =>
         job.key === key && job.state !== 'failed' && job.expires > Date.now()
     )
-    if (previous) return previous
-    if (this.tasks.size || this.jobs.size >= 4)
-      throw new ApiError(
-        429,
-        'PROCESSING_BUSY',
-        'An export is running or the temporary result limit has been reached'
-      )
+    if (previous) {
+      if (!previous.result) return previous
+      try {
+        catalogue.get(
+          previous.result.dataset.id,
+          previous.result.dataset.version
+        )
+        return previous
+      } catch (error) {
+        if (!(error instanceof ApiError && error.code === 'DATASET_NOT_FOUND'))
+          throw error
+        this.jobs.delete(previous.id)
+      }
+    }
+    if (this.tasks.size)
+      throw new ApiError(429, 'PROCESSING_BUSY', 'An export is already running')
+    if (this.jobs.size >= 128) {
+      const oldest = this.jobs.keys().next().value
+      if (oldest) this.jobs.delete(oldest)
+    }
     const inputs = catalogue.processingInputs(id, version)
     const jobId = randomUUID()
     const job: Job = {
@@ -262,13 +285,13 @@ export class Processing {
       source: { id, version },
       processor: { id: processor.id, version: processor.version },
       selection,
-      readers: 0,
+      lifetime,
       expires: Infinity,
       output: path.join(this.directory, jobId + '.grib2')
     }
     this.jobs.set(jobId, job)
-    const task = this.run(job, processor, inputs).finally(() =>
-      this.tasks.delete(task)
+    const task = this.run(job, processor, catalogue, record, inputs).finally(
+      () => this.tasks.delete(task)
     )
     this.tasks.add(task)
     return job
@@ -277,8 +300,11 @@ export class Processing {
   private async run(
     job: Job,
     processor: Processor,
+    catalogue: Catalogue,
+    record: Version,
     inputs: { paths: string[]; release(): void }
   ) {
+    let publication: string | undefined
     try {
       const actual = await processor.run({
         selection: job.selection,
@@ -289,12 +315,51 @@ export class Processing {
       })
       const { size } = await fs.stat(job.output)
       ensure(size > 0 && size <= byteLimit, 'Invalid result size')
-      const hash = createHash('sha256')
-      for await (const chunk of createReadStream(job.output, {
-        signal: this.controller.signal
-      }))
-        hash.update(chunk)
-      job.result = { size, sha256: hash.digest('hex'), actual }
+      this.controller.signal.throwIfAborted()
+      const sourceMetadata = {
+        ...record.metadata,
+        ...record.inventory?.metadata
+      }
+      const times = actual.forecastTimes
+      const metadata = {
+        name: `${sourceMetadata.name ?? sourceMetadata.model ?? 'Forecast'} export`.slice(
+          0,
+          512
+        ),
+        model: sourceMetadata.model,
+        run: sourceMetadata.run,
+        bounds: job.selection.bbox ? actual.bounds : sourceMetadata.bounds,
+        fields: job.selection.fields ?? sourceMetadata.fields,
+        forecast: times?.length
+          ? { from: times[0], to: times[times.length - 1] }
+          : job.selection.from
+            ? undefined
+            : sourceMetadata.forecast
+      }
+      // Use the public publication rules, quotas and notification path.
+      const stage = await catalogue.begin({
+        kind: record.kind,
+        format: 'grib2',
+        producer: processor.id,
+        metadata,
+        ...(job.lifetime === null ? {} : { expiresInSeconds: job.lifetime }),
+        provenance: {
+          source: job.source,
+          processor: job.processor,
+          selection: job.selection
+        },
+        assets: [{ id: 'forecast_grib2', size }]
+      })
+      publication = stage.id
+      await catalogue.upload(
+        stage.id,
+        'forecast_grib2',
+        createReadStream(job.output, { signal: this.controller.signal })
+      )
+      this.controller.signal.throwIfAborted()
+      const dataset = await catalogue.commit(stage.id)
+      publication = undefined
+      job.result = { dataset, actual }
       job.state = 'complete'
     } catch (error) {
       job.state = 'failed'
@@ -304,12 +369,16 @@ export class Processing {
         ? safe
         : 'GRIB generation failed'
       if (!this.controller.signal.aborted) this.log(job.error)
-      await fs
-        .rm(job.output, { force: true })
-        .catch(() => this.log('Failed to remove incomplete GRIB export'))
+      if (publication)
+        await catalogue
+          .abort(publication)
+          .catch(() => this.log('Could not abort GRIB publication'))
     } finally {
       inputs.release()
-      job.expires = Date.now() + (job.state === 'complete' ? resultTtl : 60_000)
+      await fs
+        .rm(job.output, { force: true })
+        .catch(() => this.log('Could not remove the GRIB worker file'))
+      job.expires = Date.now() + (job.state === 'complete' ? jobTtl : 60_000)
     }
   }
 
@@ -329,58 +398,15 @@ export class Processing {
     return job
   }
 
-  async open(owner: string, id: string) {
-    const job = this.get(owner, id)
-    if (!job.result)
-      throw new ApiError(
-        409,
-        'RESULT_UNAVAILABLE',
-        'Export result is not ready'
-      )
-    job.readers++
-    let releaseReader!: () => void
-    const finished = new Promise<void>((resolve) => {
-      releaseReader = resolve
-    })
-    this.activeReaders.add(finished)
-    const release = () => {
-      job.readers--
-      this.activeReaders.delete(finished)
-      releaseReader()
-    }
-    try {
-      const handle = await fs.open(job.output, 'r')
-      return {
-        handle,
-        result: job.result,
-        release: () => handle.close().finally(release)
-      }
-    } catch (error) {
-      release()
-      throw error
-    }
-  }
-
   private sweep() {
-    for (const job of this.jobs.values()) {
-      if (job.expires > Date.now() || job.readers) continue
-      // Keep its slot until the file has been removed.
-      if (job.expires === -Infinity) continue
-      job.expires = -Infinity
-      void fs
-        .rm(job.output, { force: true })
-        .then(() => this.jobs.delete(job.id))
-        .catch(() => {
-          job.expires = 0
-          this.log('Failed to clean temporary GRIB export')
-        })
-    }
+    for (const job of this.jobs.values())
+      if (job.expires <= Date.now()) this.jobs.delete(job.id)
   }
 
   async close() {
     clearInterval(this.timer)
     this.controller.abort()
-    await Promise.all([...this.tasks, ...this.activeReaders])
+    await Promise.all(this.tasks)
     await fs.rm(this.directory, { recursive: true, force: true })
   }
 }
