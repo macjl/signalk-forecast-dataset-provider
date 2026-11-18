@@ -37,6 +37,8 @@ function securedRouter() {
       (required === 'readwrite' && role === 'readonly')
     )
       return res.status(403).end()
+    req.skIsAuthenticated = true
+    req.skPrincipal = { identifier: req.get('X-Test-User') || role }
     next()
   }
   for (const method of Object.keys(raw))
@@ -456,4 +458,59 @@ test('byte range parser handles large suffixes and rejects unsafe integers', () 
     () => byteRange('bytes=999999999999999999999999-', 10),
     (e) => e.status === 416
   )
+})
+
+test('optional processor exports an immutable version for the requesting identity', async (t) => {
+  const f = await fixture(t)
+  const { record } = await publication(f)
+  const route = `/datasets/${record.id}/versions/${record.version}/requests`
+  const json = {
+    operation: 'export',
+    output: { format: 'grib2', layout: 'single-file' }
+  }
+  assert.equal((await f.call(route, { method: 'POST', json })).status, 503)
+  const key = Symbol.for('macjl.forecast-datasets.processors.v1')
+  const registry = (globalThis[key] ??= new Map())
+  const scope = os.tmpdir()
+  registry.set(scope, {
+    id: 'test-processor',
+    version: '1',
+    capabilities: () => [{ ...json, selectors: [] }],
+    async run({ paths, output }) {
+      assert.equal(paths.length, 1)
+      await fs.copyFile(paths[0], output)
+      return { messageCount: 1 }
+    }
+  })
+  t.after(() => registry.delete(scope))
+  const response = await f.call(route, {
+    method: 'POST',
+    json,
+    role: 'readwrite'
+  })
+  assert.equal(response.status, 202)
+  let job = await response.json()
+  const jobPath = job.href.slice(API_ROOT.length)
+  assert.equal((await f.call(jobPath, { role: 'readonly' })).status, 404)
+  for (let attempt = 0; job.state === 'running' && attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    job = await (await f.call(jobPath, { role: 'readwrite' })).json()
+  }
+  assert.equal(job.state, 'complete')
+  assert.equal(
+    job.result.sha256,
+    createHash('sha256').update(content).digest('hex')
+  )
+  const data = await f.call(job.result.href.slice(API_ROOT.length), {
+    role: 'readwrite',
+    headers: { Range: 'bytes=0-3' }
+  })
+  assert.equal(data.status, 206)
+  assert.equal(await data.text(), 'GRIB')
+  const repeated = await f.call(route, {
+    method: 'POST',
+    json,
+    role: 'readwrite'
+  })
+  assert.equal((await repeated.json()).id, job.id)
 })

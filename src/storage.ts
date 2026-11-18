@@ -85,7 +85,8 @@ export class Catalogue {
     private readonly changed: (
       id: string,
       value: object | null
-    ) => void = () => {}
+    ) => void = () => {},
+    private readonly operations: (record: Version) => unknown[] = () => []
   ) {}
 
   private directory(...parts: string[]): string {
@@ -654,7 +655,7 @@ export class Catalogue {
       size: record.assets.reduce((sum, a) => sum + a.size, 0),
       assetCount: record.assets.length,
       href: `${API_ROOT}/datasets/${record.id}`,
-      capabilities: { operations: [] }
+      capabilities: { operations: this.operations(record) }
     }
     if (!summary) {
       result.declared = record.metadata
@@ -716,6 +717,15 @@ export class Catalogue {
         this.changed(id, this.resource(record))
       return structuredClone(record)
     })
+  }
+
+  processingInputs(id: string, version: string) {
+    const record = this.get(id, version)
+    const paths = record.assets
+      .map((asset) => asset.id)
+      .sort()
+      .map((asset) => path.join(this.versionDir(id, version), 'assets', asset))
+    return { paths, release: this.acquire(id) }
   }
 
   async openAsset(id: string, version: string, assetId: string) {

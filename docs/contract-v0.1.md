@@ -166,4 +166,7 @@ Plugin reads are declared `readonly`; publication, staging status and deletion a
 
 Server 2.34 limitation: the scoped router has no `HEAD` registration and its security layer matches the exact HTTP method, so `HEAD` falls back to admin-only even for a readonly `GET` route. Use `GET`/`Range` with readonly credentials. The plugin does not patch or bypass the server's permission system.
 
-`GET /status` reports contract version, dataset count and `operations: []`. Processor registration/availability, delegated temporary jobs, output handover/expiry, worker isolation and subsetting are reserved for the next piece. In particular the prototype neither installs decoders nor promises `spatialSubset` based on the upstream downloader's capabilities.
+`GET /status` reports contract version, dataset count and the available operation
+names. Without a configured processor, the operations list is empty. The
+optional [GRIB export alpha](grib-export-alpha.md) describes delegated GRIB
+processing when GRIB Processor is installed.

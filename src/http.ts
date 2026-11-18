@@ -10,6 +10,7 @@ import type { PluginRouter } from '@signalk/server-api'
 import { API_ROOT, CONTRACT_VERSION, PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { Catalogue, digest } from './storage'
 import { listResources } from './discovery'
+import type { Processing } from './processing'
 import { ApiError, ensure, identifier } from './validation'
 
 type GetStore = () => Catalogue
@@ -68,7 +69,8 @@ export function byteRange(
 export function registerRoutes(
   router: PluginRouter,
   getStore: GetStore,
-  report: (message: string) => void
+  report: (message: string) => void,
+  getProcessing: () => Processing | undefined = () => undefined
 ): void {
   const parse = express.json({ limit: '2mb', strict: true })
   const body: RequestHandler = (req, res, next) => {
@@ -125,8 +127,8 @@ export function registerRoutes(
         contractVersion: CONTRACT_VERSION,
         resourceType: RESOURCE_TYPE,
         datasets: store.all().length,
-        operations: [],
-        processing: 'not-implemented'
+        operations: getProcessing()?.available ? ['export'] : [],
+        processing: getProcessing()?.available ? 'available' : 'not-implemented'
       })
     })
   )
@@ -228,6 +230,120 @@ export function registerRoutes(
         )
       } finally {
         await opened.release()
+      }
+    })
+  )
+
+  const jobs = () => {
+    const processing = getProcessing()
+    if (!processing)
+      throw new ApiError(
+        503,
+        'PROCESSOR_UNAVAILABLE',
+        'Processing is not enabled'
+      )
+    return processing
+  }
+  const owner = (req: Request) => {
+    const context = req as Request & {
+      skPrincipal?: { identifier?: string }
+      skIsAuthenticated?: boolean
+    }
+    if (!context.skIsAuthenticated || !context.skPrincipal?.identifier)
+      throw new ApiError(
+        403,
+        'PROCESSING_AUTH_REQUIRED',
+        'Sign in to start or retrieve a GRIB export'
+      )
+    return context.skPrincipal.identifier
+  }
+
+  write.post(
+    '/datasets/:id/versions/:version/requests',
+    body,
+    wrap((req, res) => {
+      const processing = jobs()
+      const job = processing.start(
+        owner(req),
+        getStore(),
+        identifier(req.params.id),
+        identifier(req.params.version),
+        req.body
+      )
+      const status = processing.describe(job)
+      res
+        .set('Cache-Control', 'no-store')
+        .status(202)
+        .location(status.href)
+        .json(status)
+    })
+  )
+
+  read.get(
+    '/requests/:request',
+    wrap((req, res) => {
+      const processing = jobs()
+      res
+        .set('Cache-Control', 'no-store')
+        .json(
+          processing.describe(
+            processing.get(owner(req), identifier(req.params.request))
+          )
+        )
+    })
+  )
+
+  read.get(
+    '/requests/:request/data',
+    wrap(async (req, res) => {
+      const { handle, result, release } = await jobs().open(
+        owner(req),
+        identifier(req.params.request)
+      )
+      try {
+        const tag = `"sha256-${result.sha256}"`
+        res.set({
+          ETag: tag,
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'private, no-store, no-transform',
+          'Content-Type': 'application/octet-stream',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition': 'attachment; filename="forecast.grib2"'
+        })
+        if (matches(req.get('If-None-Match'), tag)) {
+          res.status(304).end()
+          return
+        }
+        let range = { start: 0, end: result.size - 1 }
+        const requested = req.get('Range')
+        if (
+          requested &&
+          (!req.get('If-Range') || req.get('If-Range') === tag)
+        ) {
+          try {
+            range = byteRange(requested, result.size)
+          } catch (error) {
+            res.set('Content-Range', `bytes */${result.size}`)
+            throw error
+          }
+          res
+            .status(206)
+            .set(
+              'Content-Range',
+              `bytes ${range.start}-${range.end}/${result.size}`
+            )
+        }
+        res.set('Content-Length', String(range.end - range.start + 1))
+        if (req.method === 'HEAD') {
+          res.end()
+          return
+        }
+        await pipeline(
+          handle.createReadStream({ ...range, autoClose: false }),
+          res
+        )
+      } finally {
+        await release()
       }
     })
   )
