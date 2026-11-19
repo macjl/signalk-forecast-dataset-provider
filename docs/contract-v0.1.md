@@ -183,5 +183,5 @@ Server 2.34 limitation: the scoped router has no `HEAD` registration and its sec
 
 `GET /status` reports contract version, dataset count and the available operation
 names. Without a configured processor, the operations list is empty. The
-optional [GRIB export alpha](grib-export-alpha.md) describes delegated GRIB
+optional [GRIB export beta](grib-export-alpha.md) describes delegated GRIB
 processing when GRIB Processor is installed.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0-beta.1 — 2026-11-19
+
+- Accept an optional dataset lifetime at publication and remove expired
+  datasets from discovery and storage while respecting active readers.
+- Delegate single-file GRIB2 exports and supported subsets to an installed
+  GRIB Processor. Advertise the selectors and limits per dataset.
+- Publish export results as catalogue datasets with source provenance and a
+  default lifetime of 20 minutes. Preserve version-bound asset downloads.
+- Publish on the npm `beta` channel. The resource contract remains 0.1.
+
 ## 0.2.0 — 2026-10-31
 
 - Require Node.js 22 or later, dropping Node.js 20 support. Align Node.js

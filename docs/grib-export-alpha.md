@@ -1,4 +1,4 @@
-# GRIB export API, sandbox alpha
+# GRIB export API, beta
 
 Enable the companion GRIB Processor plugin to expose the export capability on
 compatible forecast datasets. Forecast Dataset Provider receives the request,
@@ -44,7 +44,7 @@ Requests may still explicitly include `"operation":"export"` and
 `"output":{"format":"grib2","layout":"single-file"}`.
 
 Omit selection to concatenate all complete GRIB2 messages, in ascending asset
-ID order, without repacking. The spatial selectors in this alpha support the
+ID order, without repacking. The spatial selectors in this beta support the
 AROME SP1 0.025-degree assets published by GRIB Downloader. Wind defaults to
 the 10 m level. If using an interval, both limits are inclusive UTC hours and
 every requested field must be present at every requested hour. The reported
@@ -69,7 +69,7 @@ can reuse an existing job or an accessible result. Authorised catalogue
 readers can discover and use the derived dataset. While the job is still
 available, its status is `expired` if the result has already left the catalogue.
 
-The sandbox alpha runs one export at a time. Input and output are each limited
+The beta runs one export at a time. Input and output are each limited
 to 1 GiB. The worker writes in the catalogue filesystem. The provider moves the finished
 file into staging, reads it once to compute the checksum and commits it
 through the same publication path as an upload.
