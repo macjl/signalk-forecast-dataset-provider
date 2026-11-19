@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
-import { Transform, type Readable } from 'node:stream'
+import { Transform, Writable, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import {
   API_ROOT,
@@ -19,6 +19,7 @@ import {
 } from './types'
 import {
   ApiError,
+  date,
   declaration,
   ensure,
   identifier,
@@ -78,6 +79,8 @@ export class Catalogue {
   private deleting = new Set<string>()
   private drained = new Set<() => void>()
   private accepting = true
+  private expiryTimer?: NodeJS.Timeout
+  private sweeping?: Promise<void>
 
   constructor(
     public readonly root: string,
@@ -85,7 +88,9 @@ export class Catalogue {
     private readonly changed: (
       id: string,
       value: object | null
-    ) => void = () => {}
+    ) => void = () => {},
+    private readonly operations: (record: Version) => unknown[] = () => [],
+    private readonly report: (message: string) => void = () => {}
   ) {}
 
   private directory(...parts: string[]): string {
@@ -123,10 +128,21 @@ export class Catalogue {
       throw new ApiError(503, 'STOPPED', 'Catalogue is stopping')
   }
 
+  private expired(expiresAt?: string, now = Date.now()): boolean {
+    return expiresAt !== undefined && Date.parse(expiresAt) <= now
+  }
+
+  private head(id: string): Version | undefined {
+    const version = this.heads.get(id)
+    return version === undefined
+      ? undefined
+      : this.versions.get(id)?.get(version)
+  }
+
   async init(): Promise<void> {
     for (const folder of ['datasets', 'staging', 'trash'])
       await fs.mkdir(this.directory(folder), { recursive: true })
-    // Only explicitly tombstoned datasets are reclaimed automatically.
+    // Reclaim directories left by an interrupted removal.
     for (const item of await fs.readdir(this.directory('trash'))) {
       identifier(item)
       await fs.rm(this.directory('trash', item), {
@@ -167,6 +183,7 @@ export class Catalogue {
             record.contractVersion === CONTRACT_VERSION,
           `Invalid persisted dataset ${id}`
         )
+        if (record.expiresAt !== undefined) date(record.expiresAt, 'expiresAt')
         for (const asset of record.assets) {
           const stat = await fs.lstat(
             path.join(
@@ -267,10 +284,60 @@ export class Catalogue {
       this.staged.set(id, stage)
       await atomicJson(path.join(this.stageDir(id), 'publication.json'), stage)
     }
+    await this.reapExpired()
+    this.expiryTimer = setInterval(() => {
+      void this.reapExpired()
+    }, 5_000)
+    this.expiryTimer.unref()
+  }
+
+  reapExpired(): Promise<void> {
+    if (!this.accepting) return Promise.resolve()
+    this.sweeping ??= this.sweep().finally(() => {
+      this.sweeping = undefined
+    })
+    return this.sweeping
+  }
+
+  private async sweep(): Promise<void> {
+    const now = Date.now()
+    for (const stage of this.staged.values()) {
+      if (!this.accepting) return
+      if (
+        !this.expired(stage.declaration.expiresAt, now) ||
+        this.receiving.has(stage.id)
+      )
+        continue
+      try {
+        await this.abort(stage.id)
+      } catch (error) {
+        if (!(
+          error instanceof ApiError &&
+          ['PUBLICATION_NOT_FOUND', 'STOPPED'].includes(error.code)
+        ))
+          this.report('Could not remove expired publication ' + stage.id)
+      }
+    }
+    for (const id of this.heads.keys()) {
+      if (!this.accepting) return
+      if (!this.expired(this.head(id)?.expiresAt, now) || this.readers.has(id))
+        continue
+      try {
+        await this.remove(id)
+      } catch (error) {
+        if (!(
+          error instanceof ApiError &&
+          ['DATASET_NOT_FOUND', 'DATASET_BUSY', 'STOPPED'].includes(error.code)
+        ))
+          this.report('Could not remove expired dataset ' + id)
+      }
+    }
   }
 
   async close(): Promise<void> {
     this.accepting = false
+    clearInterval(this.expiryTimer)
+    await this.sweeping
     await Promise.all([...this.locks.values()])
     if (this.readers.size)
       await new Promise<void>((resolve) => this.drained.add(resolve))
@@ -286,7 +353,21 @@ export class Catalogue {
           'Too many unfinished publications'
         )
       const declared = declaration(input, this.limits)
-      if (datasetId) this.get(datasetId)
+      if (datasetId) {
+        const existing = this.get(datasetId)
+        ensure(
+          declared.expiresAt === undefined &&
+            declared.expiresInSeconds === undefined,
+          'New versions inherit the dataset expiration'
+        )
+        if (existing.expiresAt) declared.expiresAt = existing.expiresAt
+      }
+      if (this.expired(declared.expiresAt))
+        throw new ApiError(
+          400,
+          'INVALID_EXPIRATION',
+          'expiresAt must be in the future'
+        )
       const stage: Staging = {
         id: randomUUID(),
         datasetId: datasetId ?? randomUUID(),
@@ -370,11 +451,23 @@ export class Catalogue {
     }
   }
 
-  async upload(id: string, assetId: string, stream: Readable): Promise<Asset> {
+  // Prepared files come from our own worker directory on this filesystem.
+  // Keep the public stream and private file paths on the same validation and durability code.
+  async upload(
+    id: string,
+    assetId: string,
+    input: Readable | { preparedPath: string; signal: AbortSignal }
+  ): Promise<Asset> {
     return this.exclusive(`publication:${identifier(id)}`, async () => {
       this.ready()
       identifier(assetId)
       const stage = this.stage(id)
+      if (this.expired(stage.declaration.expiresAt))
+        throw new ApiError(
+          409,
+          'PUBLICATION_EXPIRED',
+          'Publication has expired'
+        )
       const expected = stage.declaration.assets.find((a) => a.id === assetId)
       if (!expected)
         throw new ApiError(404, 'ASSET_NOT_DECLARED', 'Asset was not declared')
@@ -431,11 +524,28 @@ export class Catalogue {
         }
       })
       try {
-        await pipeline(
-          stream,
-          check,
-          createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
-        )
+        if ('preparedPath' in input) {
+          input.signal.throwIfAborted()
+          const stat = await fs.lstat(input.preparedPath)
+          ensure(stat.isFile(), 'Prepared asset must be a regular file')
+          await fs.rename(input.preparedPath, tmp)
+          await pipeline(
+            createReadStream(tmp),
+            check,
+            new Writable({
+              write(_chunk, _encoding, done) {
+                done()
+              }
+            }),
+            { signal: input.signal }
+          )
+        } else {
+          await pipeline(
+            input,
+            check,
+            createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
+          )
+        }
         ensure(
           bytes > 0 && (expected.size === undefined || bytes === expected.size),
           'Upload size does not match declaration'
@@ -493,6 +603,20 @@ export class Catalogue {
           a.id < b.id ? -1 : a.id > b.id ? 1 : 0
         )
         const { declaration: d, datasetId } = stage
+        const now = Date.now()
+        if (this.expired(d.expiresAt, now))
+          throw new ApiError(
+            409,
+            'PUBLICATION_EXPIRED',
+            'Publication expired before commit'
+          )
+        const previousHead = this.head(datasetId)
+        const expiresAt = previousHead
+          ? previousHead.expiresAt
+          : (d.expiresAt ??
+            (d.expiresInSeconds === undefined
+              ? undefined
+              : new Date(now + d.expiresInSeconds * 1000).toISOString()))
         const version = digest({
           kind: d.kind,
           format: d.format,
@@ -507,7 +631,8 @@ export class Catalogue {
           format: d.format,
           producer: d.producer,
           state: 'complete',
-          createdAt: new Date().toISOString(),
+          createdAt: new Date(now).toISOString(),
+          ...(expiresAt ? { expiresAt } : {}),
           metadataRevision: 1,
           metadata: d.metadata,
           requested: d.requested,
@@ -572,9 +697,11 @@ export class Catalogue {
   get(id: string, version?: string): Version {
     this.ready()
     identifier(id)
+    if (version) identifier(version)
+    if (this.expired(this.head(id)?.expiresAt))
+      throw new ApiError(404, 'DATASET_NOT_FOUND', 'Dataset/version not found')
     if (this.deleting.has(id))
       throw new ApiError(409, 'DATASET_BUSY', 'Dataset deletion is in progress')
-    if (version) identifier(version)
     const record = this.versions
       .get(id)
       ?.get(version ?? this.heads.get(id) ?? '')
@@ -583,9 +710,16 @@ export class Catalogue {
     return structuredClone(record)
   }
   all(): Version[] {
-    return [...this.heads]
-      .filter(([id]) => !this.deleting.has(id))
-      .map(([id]) => this.get(id))
+    this.ready()
+    const now = Date.now()
+    return [...this.heads.keys()].flatMap((id) => {
+      const record = this.head(id)
+      return record &&
+        !this.deleting.has(id) &&
+        !this.expired(record.expiresAt, now)
+        ? [structuredClone(record)]
+        : []
+    })
   }
 
   private acquire(id: string): () => void {
@@ -644,6 +778,7 @@ export class Catalogue {
       producer: record.producer,
       state: record.state,
       createdAt: record.createdAt,
+      ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
       metadataRevision: record.metadataRevision,
       ...record.metadata,
       ...record.inventory?.metadata,
@@ -654,7 +789,7 @@ export class Catalogue {
       size: record.assets.reduce((sum, a) => sum + a.size, 0),
       assetCount: record.assets.length,
       href: `${API_ROOT}/datasets/${record.id}`,
-      capabilities: { operations: [] }
+      capabilities: { operations: this.operations(record) }
     }
     if (!summary) {
       result.declared = record.metadata
@@ -718,6 +853,15 @@ export class Catalogue {
     })
   }
 
+  processingInputs(id: string, version: string) {
+    const record = this.get(id, version)
+    const paths = record.assets
+      .map((asset) => asset.id)
+      .sort()
+      .map((asset) => path.join(this.versionDir(id, version), 'assets', asset))
+    return { paths, release: this.acquire(id) }
+  }
+
   async openAsset(id: string, version: string, assetId: string) {
     const record = this.get(id, version)
     const asset = record.assets.find((a) => a.id === identifier(assetId))
@@ -740,6 +884,7 @@ export class Catalogue {
       }
       return {
         asset,
+        expiresAt: record.expiresAt,
         handle,
         release: async () => {
           await handle.close().finally(release)
@@ -753,7 +898,14 @@ export class Catalogue {
 
   async remove(id: string, notify = true): Promise<void> {
     return this.exclusive('catalogue', async () => {
-      this.get(id)
+      this.ready()
+      identifier(id)
+      if (!this.heads.has(id))
+        throw new ApiError(
+          404,
+          'DATASET_NOT_FOUND',
+          'Dataset/version not found'
+        )
       if (
         this.readers.has(id) ||
         [...this.staged.values()].some((s) => s.datasetId === id)

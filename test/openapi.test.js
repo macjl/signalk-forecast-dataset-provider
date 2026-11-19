@@ -17,5 +17,11 @@ test('published OpenAPI document is valid and advertises only implemented endpoi
       .schema.properties.assets.items.required,
     ['id']
   )
+  assert.ok(
+    document.paths['/datasets/{id}/versions/{version}/requests'].post.responses[
+      '202'
+    ]
+  )
+  assert.ok(document.paths['/requests/{request}'].get)
   assert.equal(document.paths['/processors'], undefined)
 })

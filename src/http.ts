@@ -10,6 +10,7 @@ import type { PluginRouter } from '@signalk/server-api'
 import { API_ROOT, CONTRACT_VERSION, PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { Catalogue, digest } from './storage'
 import { listResources } from './discovery'
+import type { Processing } from './processing'
 import { ApiError, ensure, identifier } from './validation'
 
 type GetStore = () => Catalogue
@@ -68,7 +69,8 @@ export function byteRange(
 export function registerRoutes(
   router: PluginRouter,
   getStore: GetStore,
-  report: (message: string) => void
+  report: (message: string) => void,
+  getProcessing: () => Processing | undefined = () => undefined
 ): void {
   const parse = express.json({ limit: '2mb', strict: true })
   const body: RequestHandler = (req, res, next) => {
@@ -102,6 +104,8 @@ export function registerRoutes(
           const known = error instanceof ApiError
           if (!known)
             report(error instanceof Error ? error.message : String(error))
+          if (known && error.code === 'PROCESSING_BUSY')
+            res.set('Retry-After', '1')
           res.removeHeader('ETag')
           res.removeHeader('Content-Length')
           res.set('Cache-Control', 'no-store').type('application/json')
@@ -125,8 +129,8 @@ export function registerRoutes(
         contractVersion: CONTRACT_VERSION,
         resourceType: RESOURCE_TYPE,
         datasets: store.all().length,
-        operations: [],
-        processing: 'not-implemented'
+        operations: getProcessing()?.available ? ['export'] : [],
+        processing: getProcessing()?.available ? 'available' : 'not-implemented'
       })
     })
   )
@@ -189,7 +193,9 @@ export function registerRoutes(
         res.set({
           ETag: tag,
           'Accept-Ranges': 'bytes',
-          'Cache-Control': 'private, max-age=31536000, immutable, no-transform',
+          'Cache-Control': opened.expiresAt
+            ? 'private, no-store, no-transform'
+            : 'private, max-age=31536000, immutable, no-transform',
           'Content-Type': asset.mediaType,
           'X-Content-Type-Options': 'nosniff',
           'Content-Disposition': `attachment; filename="${asset.id}"`
@@ -229,6 +235,66 @@ export function registerRoutes(
       } finally {
         await opened.release()
       }
+    })
+  )
+
+  const jobs = () => {
+    const processing = getProcessing()
+    if (!processing)
+      throw new ApiError(
+        503,
+        'PROCESSOR_UNAVAILABLE',
+        'Processing is not enabled'
+      )
+    return processing
+  }
+  const owner = (req: Request) => {
+    const context = req as Request & {
+      skPrincipal?: { identifier?: string }
+      skIsAuthenticated?: boolean
+    }
+    if (!context.skIsAuthenticated || !context.skPrincipal?.identifier)
+      throw new ApiError(
+        403,
+        'PROCESSING_AUTH_REQUIRED',
+        'Sign in to start or retrieve a GRIB export'
+      )
+    return context.skPrincipal.identifier
+  }
+
+  write.post(
+    '/datasets/:id/versions/:version/requests',
+    body,
+    wrap((req, res) => {
+      const processing = jobs()
+      const job = processing.start(
+        owner(req),
+        getStore(),
+        identifier(req.params.id),
+        identifier(req.params.version),
+        req.body
+      )
+      const status = processing.describe(job, getStore())
+      res.set('Cache-Control', 'no-store')
+      if (status.state === 'running') res.set('Retry-After', '1')
+      res
+        .status(status.state === 'running' ? 202 : 200)
+        .location(status.href)
+        .json(status)
+    })
+  )
+
+  read.get(
+    '/requests/:request',
+    wrap((req, res) => {
+      const processing = jobs()
+      const status = processing.describe(
+        processing.get(owner(req), identifier(req.params.request)),
+        getStore()
+      )
+      res.set('Cache-Control', 'no-store')
+      if (status.state === 'running') res.set('Retry-After', '1')
+      res.json(status)
     })
   )
 

@@ -37,6 +37,8 @@ function securedRouter() {
       (required === 'readwrite' && role === 'readonly')
     )
       return res.status(403).end()
+    req.skIsAuthenticated = true
+    req.skPrincipal = { identifier: req.get('X-Test-User') || role }
     next()
   }
   for (const method of Object.keys(raw))
@@ -455,5 +457,103 @@ test('byte range parser handles large suffixes and rejects unsafe integers', () 
   assert.throws(
     () => byteRange('bytes=999999999999999999999999-', 10),
     (e) => e.status === 416
+  )
+})
+
+test('optional processor exports an immutable version for the requesting identity', async (t) => {
+  const f = await fixture(t)
+  const { record } = await publication(f)
+  const route = `/datasets/${record.id}/versions/${record.version}/requests`
+  const json = {
+    operation: 'export',
+    output: { format: 'grib2', layout: 'single-file' }
+  }
+  assert.equal((await f.call(route, { method: 'POST', json })).status, 503)
+  const key = Symbol.for('macjl.forecast-datasets.processors.v1')
+  const registry = (globalThis[key] ??= new Map())
+  const scope = os.tmpdir()
+  registry.set(scope, {
+    id: 'test-processor',
+    version: '1',
+    capabilities: () => [{ ...json, selectors: [] }],
+    async run({ paths, output }) {
+      assert.equal(paths.length, 1)
+      await fs.copyFile(paths[0], output)
+      return { messageCount: 1 }
+    }
+  })
+  t.after(() => registry.delete(scope))
+  const advertised = (await f.provider.methods.listResources({}))[record.id]
+    .capabilities.operations[0]
+  assert.equal(advertised.href, API_ROOT + route)
+  assert.equal(advertised.maxInputBytes, 1024 ** 3)
+  const response = await f.call(advertised.href.slice(API_ROOT.length), {
+    method: 'POST',
+    role: 'readwrite'
+  })
+  assert.equal(response.status, 202)
+  assert.equal(response.headers.get('retry-after'), '1')
+  let job = await response.json()
+  const jobPath = job.href.slice(API_ROOT.length)
+  assert.equal((await f.call(jobPath, { role: 'readonly' })).status, 404)
+  for (let attempt = 0; job.state === 'running' && attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    job = await (await f.call(jobPath, { role: 'readwrite' })).json()
+  }
+  assert.equal(job.state, 'complete')
+  const result = job.result
+  assert.notEqual(result.id, record.id)
+  assert.ok(result.expiresAt)
+  assert.equal(
+    result.assets[0].sha256,
+    createHash('sha256').update(content).digest('hex')
+  )
+  const listed = await f.provider.methods.listResources({})
+  assert.equal(listed[result.id].expiresAt, result.expiresAt)
+  const read = await f.call(result.href.slice(API_ROOT.length), {
+    role: 'readonly'
+  })
+  assert.equal(read.status, 200)
+  assert.deepEqual((await read.json()).provenance.source, {
+    id: record.id,
+    version: record.version
+  })
+  const data = await f.call(result.assets[0].href.slice(API_ROOT.length), {
+    role: 'readonly',
+    headers: { Range: 'bytes=0-3' }
+  })
+  assert.equal(data.status, 206)
+  assert.match(data.headers.get('cache-control'), /no-store/)
+  assert.equal(await data.text(), 'GRIB')
+  const repeated = await f.call(route, {
+    method: 'POST',
+    json,
+    role: 'readwrite'
+  })
+  assert.equal(repeated.status, 200)
+  assert.equal((await repeated.json()).id, job.id)
+  const requested = await f.call(route, {
+    method: 'POST',
+    json: { ...json, expiresInSeconds: null },
+    role: 'readwrite'
+  })
+  assert.equal(requested.status, 202)
+  let durable = await requested.json()
+  for (
+    let attempt = 0;
+    durable.state === 'running' && attempt < 100;
+    attempt++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    durable = await (
+      await f.call(durable.href.slice(API_ROOT.length), { role: 'readwrite' })
+    ).json()
+  }
+  assert.equal(durable.state, 'complete')
+  assert.equal(durable.result.expiresAt, undefined)
+  assert.equal(
+    durable.result.version,
+    result.version,
+    'retention does not change byte identity'
   )
 })

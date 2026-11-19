@@ -13,10 +13,12 @@ import { registerRoutes } from './http'
 import { ApiError } from './validation'
 import { PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { openApi } from './openapi'
+import { Processing } from './processing'
 import { parseSettings, settingsSchema } from './settings'
 
 function createPlugin(app: ServerAPI): Plugin {
   let current: Catalogue | undefined
+  let jobs: Processing | undefined
   let generation = 0
   let starting = Promise.resolve()
   const store = (): Catalogue => {
@@ -37,35 +39,54 @@ function createPlugin(app: ServerAPI): Plugin {
         const root = input.storageDirectory
           ? path.resolve(input.storageDirectory as string)
           : path.join(app.getDataDirPath(), 'catalogue')
-        const candidate = new Catalogue(root, limits, (id, value) => {
-          try {
-            app.handleMessage(
-              PLUGIN_ID,
-              {
-                updates: [
-                  {
-                    values: [
-                      {
-                        path: `resources.${RESOURCE_TYPE}.${id}` as Path,
-                        value: value as Value
-                      }
-                    ]
-                  }
-                ]
-              },
-              'v2' as SKVersion
-            )
-          } catch (error) {
-            app.error(
-              `Dataset persisted but notification failed: ${String(error)}`
-            )
-          }
-        })
+        const dataDir = app.getDataDirPath()
+        const processing = new Processing(
+          path.dirname(dataDir),
+          path.join(root, 'processing-work'),
+          (message) => app.error(message)
+        )
+        const candidate = new Catalogue(
+          root,
+          limits,
+          (id, value) => {
+            try {
+              app.handleMessage(
+                PLUGIN_ID,
+                {
+                  updates: [
+                    {
+                      values: [
+                        {
+                          path: `resources.${RESOURCE_TYPE}.${id}` as Path,
+                          value: value as Value
+                        }
+                      ]
+                    }
+                  ]
+                },
+                'v2' as SKVersion
+              )
+            } catch (error) {
+              app.error(
+                `Dataset persisted but notification failed: ${String(error)}`
+              )
+            }
+          },
+          (record) =>
+            processing.capabilities(
+              record,
+              Math.min(limits.maxAssetBytes, limits.maxDatasetBytes)
+            ),
+          (message) => app.error(message)
+        )
         await candidate.init()
+        await processing.init()
         if (attempt !== generation) {
+          await processing.close()
           await candidate.close()
           return
         }
+        jobs = processing
         current = candidate
         app.registerResourceProvider({
           type: RESOURCE_TYPE,
@@ -120,12 +141,20 @@ function createPlugin(app: ServerAPI): Plugin {
       generation++
       const active = current
       current = undefined
+      const processing = jobs
+      jobs = undefined
+      if (processing) await processing.close()
       if (active) await active.close()
       await starting
       app.setPluginStatus('Stopped')
     },
     registerWithRouter(router) {
-      registerRoutes(router, store, (message) => app.error(message))
+      registerRoutes(
+        router,
+        store,
+        (message) => app.error(message),
+        () => jobs
+      )
     },
     getOpenApi: () => openApi
   }

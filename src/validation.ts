@@ -181,6 +181,16 @@ export function metadata(value: unknown): Metadata {
   if (input.grid !== undefined) out.grid = jsonObject(input.grid, 'grid')
   return out
 }
+export function expirySeconds(value: unknown): number {
+  ensure(
+    typeof value === 'number' &&
+      Number.isSafeInteger(value) &&
+      value >= 1 &&
+      value <= 31_536_000,
+    'expiresInSeconds must be a whole number between 1 and 31536000'
+  )
+  return value
+}
 export function declaration(value: unknown, limits: Limits): Declaration {
   const input = object(value, 'publication')
   keys(
@@ -192,6 +202,8 @@ export function declaration(value: unknown, limits: Limits): Declaration {
       'metadata',
       'requested',
       'provenance',
+      'expiresAt',
+      'expiresInSeconds',
       'assets'
     ],
     'publication'
@@ -255,6 +267,14 @@ export function declaration(value: unknown, limits: Limits): Declaration {
     metadata: metadata(input.metadata ?? {}),
     assets
   }
+  ensure(
+    input.expiresAt === undefined || input.expiresInSeconds === undefined,
+    'Specify either expiresAt or expiresInSeconds'
+  )
+  if (input.expiresAt !== undefined)
+    result.expiresAt = date(input.expiresAt, 'expiresAt')
+  if (input.expiresInSeconds !== undefined)
+    result.expiresInSeconds = expirySeconds(input.expiresInSeconds)
   if (input.requested !== undefined)
     result.requested = jsonObject(input.requested, 'requested')
   if (input.provenance !== undefined)

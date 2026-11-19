@@ -66,6 +66,21 @@ Commit removes the staging entry. If its successful HTTP response was lost, a re
 
 `DELETE /publications/{publication}` aborts staging and releases its files. It does not delete an already published dataset. Unfinished content is not returned by public catalogue discovery.
 
+## Dataset expiration
+
+To expire any new dataset, supply either an absolute UTC `expiresAt`, or
+an integer `expiresInSeconds` from 1 to 31536000. A relative duration begins
+at commit. Omit both fields to publish without an expiration. Versions added
+to an existing dataset inherit its expiration. Content hashes do not include
+lifetime information.
+
+The catalogue exposes the resolved `expiresAt` in listings and detail. At that
+time, the dataset drops out of discovery and new requests for its versions or
+assets return `DATASET_NOT_FOUND`. Accepted reads can finish. The provider
+then reclaims the files and sends the normal deletion notification. Cleanup
+runs periodically and on startup. Absolute-dated publications that expire
+before commit are abandoned, including staged versions of expiring datasets.
+
 ## Content versions and storage ownership
 
 Dataset IDs are server-generated UUIDs. A content `version` is a SHA-256 digest over canonical JSON containing `kind`, `format` and the completed asset descriptors (`id`, `size`, `sha256`, `mediaType`), sorted by asset ID in ASCII order. Object keys sort lexicographically by UTF-16 code unit; array order is retained. Strings are not Unicode-normalised. This is a prototype-specific canonicalisation, not a claim of RFC 8785 compatibility.
@@ -158,7 +173,7 @@ Custom publication, enrichment of the current head and deletion emit deltas at `
 
 `DELETE /datasets/{id}` deletes all committed versions, but returns 409 while a reader or an unfinished version publication uses that dataset. Deletion blocks new reads before moving content to a tombstone; unfinished tombstone cleanup is completed on startup. A plugin stop refuses new operations and waits for accepted mutations and active reads before closing. Signal K handles Resource Provider deregistration during plugin shutdown.
 
-Advanced retention policies, per-version deletion, automatic staging expiry and global storage quotas are not implemented. Admins can inspect/abort known unfinished publication IDs and delete idle datasets through this API.
+Per-version deletion, age-based cleanup of staging without an explicit expiration and global storage quotas are not implemented. Admins can inspect/abort known unfinished publication IDs and delete idle datasets through this API.
 
 ## Access and future processors
 
@@ -166,4 +181,7 @@ Plugin reads are declared `readonly`; publication, staging status and deletion a
 
 Server 2.34 limitation: the scoped router has no `HEAD` registration and its security layer matches the exact HTTP method, so `HEAD` falls back to admin-only even for a readonly `GET` route. Use `GET`/`Range` with readonly credentials. The plugin does not patch or bypass the server's permission system.
 
-`GET /status` reports contract version, dataset count and `operations: []`. Processor registration/availability, delegated temporary jobs, output handover/expiry, worker isolation and subsetting are reserved for the next piece. In particular the prototype neither installs decoders nor promises `spatialSubset` based on the upstream downloader's capabilities.
+`GET /status` reports contract version, dataset count and the available operation
+names. Without a configured processor, the operations list is empty. The
+optional [GRIB export beta](grib-export-alpha.md) describes delegated GRIB
+processing when GRIB Processor is installed.

@@ -538,3 +538,99 @@ test('startup cleans an interrupted empty publication but refuses missing publis
   const broken = new Catalogue(f.root)
   await assert.rejects(broken.init())
 })
+
+test('an expired dataset blocks new reads and is reclaimed after existing readers finish', async (t) => {
+  const f = await fixture(t)
+  const now = Date.parse('2026-11-18T12:00:00Z')
+  t.mock.timers.enable({ apis: ['Date'], now })
+  const stage = await f.store.begin({
+    ...input(),
+    kind: 'analysis',
+    format: 'json',
+    expiresInSeconds: 10
+  })
+  await f.store.upload(stage.id, 'part-0', Readable.from([bytes]))
+  t.mock.timers.tick(3000)
+  const base = await f.store.commit(stage.id)
+  assert.equal(base.expiresAt, new Date(now + 13_000).toISOString())
+  const later = await f.store.begin(
+    { ...input(), kind: 'analysis', format: 'json' },
+    base.id
+  )
+  const replacement = Buffer.from(bytes).fill(1)
+  await f.store.upload(later.id, 'part-0', Readable.from([replacement]))
+  const newer = await f.store.commit(later.id)
+  assert.equal(newer.expiresAt, base.expiresAt)
+  await f.restart()
+  assert.equal(f.store.get(base.id).expiresAt, base.expiresAt)
+  const reader = await f.store.openAsset(base.id, base.version, 'part-0')
+  try {
+    t.mock.timers.tick(10_001)
+    assert.deepEqual(f.store.all(), [])
+    await assert.rejects(
+      f.store.openAsset(base.id, newer.version, 'part-0'),
+      (error) => error.code === 'DATASET_NOT_FOUND'
+    )
+    await f.store.reapExpired()
+    assert.deepEqual(await reader.handle.readFile(), bytes)
+    await fs.access(path.join(f.root, 'datasets', base.id))
+  } finally {
+    await reader.release()
+  }
+  await f.store.reapExpired()
+  await assert.rejects(fs.access(path.join(f.root, 'datasets', base.id)), {
+    code: 'ENOENT'
+  })
+  assert.deepEqual(f.changes.at(-1), { id: base.id, value: null })
+})
+
+test('an absolute expiry survives downtime and reclaims expired uncommitted data', async (t) => {
+  const f = await fixture(t)
+  const now = Date.parse('2026-11-18T12:00:00Z')
+  t.mock.timers.enable({ apis: ['Date'], now })
+  const expiresAt = new Date(now + 5000).toISOString()
+  const base = await f.store.begin({ ...input(), expiresAt })
+  await f.store.upload(base.id, 'part-0', Readable.from([bytes]))
+  const record = await f.store.commit(base.id)
+  const stage = await f.store.begin(input(), record.id)
+  await f.store.upload(stage.id, 'part-0', Readable.from([bytes]))
+  t.mock.timers.tick(5001)
+  await assert.rejects(
+    f.store.commit(stage.id),
+    (error) => error.code === 'PUBLICATION_EXPIRED'
+  )
+  await f.restart()
+  assert.deepEqual(f.store.all(), [])
+  assert.deepEqual(f.store.publications(), {})
+  await assert.rejects(fs.access(path.join(f.root, 'datasets', record.id)), {
+    code: 'ENOENT'
+  })
+  await assert.rejects(
+    f.store.begin({ ...input(), expiresAt }),
+    (error) => error.code === 'INVALID_EXPIRATION'
+  )
+})
+
+test('a prepared worker asset keeps its file identity and the published receipt verifies its bytes', async (t) => {
+  const f = await fixture(t)
+  const workerFile = path.join(f.root, 'worker.grib2')
+  await fs.writeFile(workerFile, bytes)
+  const workerStat = await fs.stat(workerFile)
+  const publication = await f.store.begin(input())
+  const signal = new AbortController().signal
+  const asset = await f.store.upload(publication.id, 'part-0', {
+    preparedPath: workerFile,
+    signal
+  })
+  assert.equal(asset.sha256, createHash('sha256').update(bytes).digest('hex'))
+  const record = await f.store.commit(publication.id)
+  const opened = await f.store.openAsset(record.id, record.version, asset.id)
+  try {
+    const publishedStat = await opened.handle.stat()
+    assert.equal(publishedStat.ino, workerStat.ino)
+    assert.deepEqual(await opened.handle.readFile(), bytes)
+  } finally {
+    await opened.release()
+  }
+  await assert.rejects(fs.access(workerFile), { code: 'ENOENT' })
+})

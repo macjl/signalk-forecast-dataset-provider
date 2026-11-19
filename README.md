@@ -2,7 +2,7 @@
 
 Signal K Resource Provider for **`forecastDatasets`**: a shared catalogue of persistent, immutable forecast content. Downloaders and receivers publish original bytes; routing, weather and navigation clients discover and retrieve them without depending on private directories.
 
-**Version 0.2.0 requires Node.js 22 or later.** It implements staged multi-asset publication (including unknown-size streams), live publication progress, SHA-256 content versions, resumable publication after restart, verified-inventory enrichment, filtered discovery, HTTP Range/HEAD/ETag access, deletion coordination and v2 resource deltas. No GRIB/Zarr decoder is bundled. Formats are declared, not detected or validated meteorologically.
+**Requires Node.js 22 or later.** It implements staged multi-asset publication (including unknown-size streams), live publication progress, SHA-256 content versions, resumable publication after restart, verified-inventory enrichment, filtered discovery, HTTP Range/HEAD/ETag access, deletion coordination and v2 resource deltas. No GRIB/Zarr decoder is bundled. Formats are declared, not detected or validated meteorologically.
 
 The architecture and examples come from the [project outline](https://github.com/macjl/signalk-grib-resources/blob/c289876e4d4e5faadbb6779d865d7aa21a0d9822/docs/project-outline.md). The wire contract selected for this prototype is documented in [contract 0.1](docs/contract-v0.1.md); it is experimental, not an adopted Signal K specification.
 
@@ -26,7 +26,7 @@ npm run check
 npm pack
 ```
 
-Install the resulting archive using the server's normal plugin installation workflow, for example `npm install /path/to/signalk-forecast-dataset-provider-0.2.0.tgz` from its configuration directory. No npm release is required for local testing.
+Install the resulting archive from the Signal K configuration directory. To test the published beta instead, install `signalk-forecast-dataset-provider@beta`. Use Signal K 2.35.1 when testing delegated GRIB export with GRIB Processor.
 
 The default storage location is `<plugin data directory>/catalogue`. An optional absolute `storageDirectory` can be configured. Use a local filesystem supporting hard links and atomic rename, with a single catalogue writer. Limits are configurable for asset bytes, dataset bytes, asset count and unfinished publications. They are per-publication limits, not an automatic total-disk-quota policy. Unfinished publications persist until resumed or explicitly aborted.
 
@@ -74,11 +74,16 @@ An independent trusted indexer can publish metadata plus an opaque index to `PUT
 
 Publication completeness and inventory verification are distinct. A radio-received file can be published with sparse metadata and remain downloadable before indexing. Strict coverage/field filters exclude unknown inventory rather than treating requested data as verified. Large indexes live on disk and are retrieved separately from catalogue summaries.
 
-## Next pieces
+## Expiration and GRIB export beta
 
-The catalogue works without processors. In v0.1 the advertised `operations` array is empty. Automatic indexer registration, processor dispatch, temporary subset jobs and isolated GRIB workers belong to the next implementation stage; no transform capability is advertised prematurely. A concrete GRIB indexer can already use the enrichment interface independently.
+A new dataset can declare an optional `expiresInSeconds`. The lifetime starts
+at commit. Expired datasets leave discovery and are removed after in-flight
+reads finish. The API reports their expiration as `expiresAt`.
 
-Persistent derived datasets can use the ordinary producer API and supply provenance. Runtime temporary-result handling, spatial subsetting, Zarr/harmonic processing, federation, archival policies and shared decoded caches are not implemented in this version. The Weather API is unchanged.
+Install GRIB Processor alongside this beta to enable [delegated GRIB2
+exports](docs/grib-export-alpha.md). The provider advertises supported selectors
+on eligible datasets and publishes each completed export as a normal catalogue
+dataset. Original assets remain available through their version-bound URLs.
 
 ## Development and verification
 
