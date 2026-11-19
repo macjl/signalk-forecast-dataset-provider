@@ -271,6 +271,8 @@ export const openApi = {
                   selection: {
                     type: 'object',
                     additionalProperties: false,
+                    description:
+                      'Use selectors advertised by the dataset. Supply from and to together for an inclusive UTC range over available valid times.',
                     properties: {
                       bbox: metadata.properties.bounds,
                       fields: metadata.properties.fields,
@@ -282,7 +284,15 @@ export const openApi = {
               },
               examples: {
                 assemble: { value: {} },
-                crop: { value: { selection: { bbox: [-6, 44, -1, 48] } } }
+                crop: { value: { selection: { bbox: [-6, 44, -1, 48] } } },
+                timeRange: {
+                  value: {
+                    selection: {
+                      from: '2026-11-18T12:15:00Z',
+                      to: '2026-11-18T18:15:00Z'
+                    }
+                  }
+                }
               }
             }
           }
