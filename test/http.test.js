@@ -472,14 +472,24 @@ test('optional processor exports an immutable version for the requesting identit
   const key = Symbol.for('macjl.forecast-datasets.processors.v1')
   const registry = (globalThis[key] ??= new Map())
   const scope = os.tmpdir()
+  const selections = []
   registry.set(scope, {
     id: 'test-processor',
     version: '1',
-    capabilities: () => [{ ...json, selectors: [] }],
-    async run({ paths, output }) {
+    capabilities: (_record, support) => {
+      assert.deepEqual(support, { timeRanges: true, unlistedFields: true })
+      return [{ ...json, selectors: ['from', 'to', 'fields'] }]
+    },
+    async run({ selection, paths, output }) {
       assert.equal(paths.length, 1)
+      selections.push(selection)
       await fs.copyFile(paths[0], output)
-      return { messageCount: 1 }
+      return {
+        messageCount: 1,
+        ...(selection.from
+          ? { forecastTimes: ['2026-11-19T06:00:00Z', '2026-11-19T09:00:00Z'] }
+          : {})
+      }
     }
   })
   t.after(() => registry.delete(scope))
@@ -487,6 +497,7 @@ test('optional processor exports an immutable version for the requesting identit
     .capabilities.operations[0]
   assert.equal(advertised.href, API_ROOT + route)
   assert.equal(advertised.maxInputBytes, 1024 ** 3)
+  assert.deepEqual(advertised.selectors, ['from', 'to', 'fields'])
   const response = await f.call(advertised.href.slice(API_ROOT.length), {
     method: 'POST',
     role: 'readwrite'
@@ -556,4 +567,45 @@ test('optional processor exports an immutable version for the requesting identit
     result.version,
     'retention does not change byte identity'
   )
+
+  const from = '2026-11-19T05:40:00Z'
+  const to = '2026-11-19T09:10:00Z'
+  for (const invalid of [{ from }, { from: to, to: from }]) {
+    assert.equal(
+      (
+        await f.call(route, {
+          method: 'POST',
+          json: { selection: invalid },
+          role: 'readwrite'
+        })
+      ).status,
+      400
+    )
+  }
+  const range = await f.call(route, {
+    method: 'POST',
+    json: { selection: { from, to } },
+    role: 'readwrite'
+  })
+  assert.equal(range.status, 202)
+  let subset = await range.json()
+  for (
+    let attempt = 0;
+    subset.state === 'running' && attempt < 100;
+    attempt++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    subset = await (
+      await f.call(subset.href.slice(API_ROOT.length), { role: 'readwrite' })
+    ).json()
+  }
+  assert.equal(subset.state, 'complete')
+  assert.deepEqual(selections.at(-1), {
+    from: '2026-11-19T05:40:00.000Z',
+    to: '2026-11-19T09:10:00.000Z'
+  })
+  assert.deepEqual(subset.result.forecast, {
+    from: '2026-11-19T06:00:00.000Z',
+    to: '2026-11-19T09:00:00.000Z'
+  })
 })

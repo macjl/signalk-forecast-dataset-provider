@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0-beta.2 — 2026-11-19
+
+- Accept inclusive UTC time ranges without requiring explicit fields or a fixed
+  forecast cadence when the processor supports them.
+- Allow field selectors on GRIB2 datasets without a published field list.
+  GRIB Processor checks requested parameters and levels against the source.
+- Document capability discovery and the export lifecycle with curl examples.
+
 ## 0.3.0-beta.1 — 2026-11-19
 
 - Accept an optional dataset lifetime at publication and remove expired

@@ -32,10 +32,15 @@ type Capability = {
   fields?: Field[]
   forecastInterval?: { stepSeconds: number; maxHours: number }
 }
+// Older providers require a list of fields and a fixed forecast grid.
+const supportedSelectors = { timeRanges: true, unlistedFields: true } as const
 interface Processor {
   id: string
   version: string
-  capabilities(record: Version): Capability[]
+  capabilities(
+    record: Version,
+    support: typeof supportedSelectors
+  ): Capability[]
   run(input: {
     selection: Selection
     paths: string[]
@@ -120,23 +125,26 @@ function processingRequest(
     const wanted = fields(selectors.fields)
     ensure(wanted.length > 0, 'Select at least one field')
     const selected = new Map<string, Field>()
-    for (const field of wanted) {
-      const matches = (capability.fields ?? []).filter(
-        (candidate) =>
-          candidate.parameter === field.parameter &&
-          (!field.level ||
-            (field.level.type === candidate.level?.type &&
-              field.level.value === candidate.level.value &&
-              (!field.level.unit || field.level.unit === candidate.level.unit)))
-      )
-      if (matches.length !== 1)
-        throw new ApiError(
-          422,
-          'UNSUPPORTED_FIELD',
-          'Choose one of the parameter and level pairs advertised for this dataset'
+    for (let field of wanted) {
+      if (capability.fields?.length) {
+        const matches = capability.fields.filter(
+          (candidate) =>
+            candidate.parameter === field.parameter &&
+            (!field.level ||
+              (field.level.type === candidate.level?.type &&
+                field.level.value === candidate.level.value &&
+                (!field.level.unit ||
+                  field.level.unit === candidate.level.unit)))
         )
-      const match = matches[0]!
-      selected.set(canonical(match), match)
+        if (matches.length !== 1)
+          throw new ApiError(
+            422,
+            'UNSUPPORTED_FIELD',
+            'Choose one of the parameter and level pairs advertised for this dataset'
+          )
+        field = matches[0]!
+      }
+      selected.set(canonical(field), field)
     }
     selection.fields = [...selected.keys()]
       .sort()
@@ -147,26 +155,22 @@ function processingRequest(
     'Supply both from and to'
   )
   if (selectors.from !== undefined) {
-    ensure(selection.fields, 'A forecast interval requires explicit fields')
-    const interval = capability.forecastInterval
-    if (!interval)
-      throw new ApiError(
-        422,
-        'UNSUPPORTED_SELECTION',
-        'This export profile does not support a forecast interval'
-      )
     const from = date(selectors.from, 'from')
     const to = date(selectors.to, 'to')
-    const step = interval.stepSeconds * 1000
-    const first = Date.parse(from)
-    const last = Date.parse(to)
-    ensure(
-      first % step === 0 &&
-        last % step === 0 &&
-        last >= first &&
-        last - first <= interval.maxHours * 3600_000,
-      `Choose a forward interval of at most ${interval.maxHours} hours aligned to ${interval.stepSeconds}-second UTC steps`
-    )
+    ensure(from <= to, 'from must not follow to')
+    const interval = capability.forecastInterval
+    if (interval) {
+      ensure(selection.fields, 'This export profile requires explicit fields')
+      const step = interval.stepSeconds * 1000
+      const first = Date.parse(from)
+      const last = Date.parse(to)
+      ensure(
+        first % step === 0 &&
+          last % step === 0 &&
+          last - first <= interval.maxHours * 3600_000,
+        `Choose a forward interval of at most ${interval.maxHours} hours aligned to ${interval.stepSeconds}-second UTC steps`
+      )
+    }
     selection.from = from
     selection.to = to
   }
@@ -209,12 +213,14 @@ export class Processing {
   capabilities(record: Version, outputLimit = byteLimit) {
     if (record.assets.reduce((sum, asset) => sum + asset.size, 0) > byteLimit)
       return []
-    return (this.processor?.capabilities(record) ?? []).map((capability) => ({
-      ...capability,
-      href: `${API_ROOT}/datasets/${record.id}/versions/${record.version}/requests`,
-      maxInputBytes: byteLimit,
-      maxOutputBytes: Math.min(byteLimit, outputLimit)
-    }))
+    return (this.processor?.capabilities(record, supportedSelectors) ?? []).map(
+      (capability) => ({
+        ...capability,
+        href: `${API_ROOT}/datasets/${record.id}/versions/${record.version}/requests`,
+        maxInputBytes: byteLimit,
+        maxOutputBytes: Math.min(byteLimit, outputLimit)
+      })
+    )
   }
 
   describe(job: Job, catalogue: Catalogue) {
@@ -258,11 +264,11 @@ export class Processing {
       throw new ApiError(
         503,
         'PROCESSOR_UNAVAILABLE',
-        'Enable GRIB Processor and configure its Python runtime'
+        'Enable GRIB Processor on the catalogue server'
       )
     const record = catalogue.get(id, version)
     const capability = processor
-      .capabilities(record)
+      .capabilities(record, supportedSelectors)
       .find((item) => item.operation === 'export')
     if (!capability)
       throw new ApiError(
