@@ -60,9 +60,8 @@ and [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/
 
 ## Prepare the real plugin version
 
-The release prepared here is **0.3.0-beta.1**. Decide the new version before tagging
-each subsequent release.
-Keep `package.json`, `package-lock.json`, the OpenAPI info version and changelog
+Decide the version before tagging each release. Keep `package.json`,
+`package-lock.json`, the OpenAPI info version and changelog
 consistent if changing it. The resource contract stays `0.1` independently of
 the npm package version.
 

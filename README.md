@@ -10,6 +10,8 @@ The architecture and examples come from the [project outline](https://github.com
 
 Requires **Signal K server 2.34 or later within 2.x** and Node.js 22 or later for this plugin. Dependency migration integration was also verified against Signal K 2.35.1.
 
+For automatic GRIB2 analysis and on-demand GRIB exports, add [GRIB Processor](https://github.com/macjl/signalk-grib-processor), which requires Node.js 24 or later.
+
 See the [coordinated upgrade guide](docs/upgrading.md) before upgrading the downloader and Weather Provider from local-file releases. The complete chain requires Node.js 24+.
 
 Install the stable release from the Signal K App Store or from its configuration directory:
@@ -26,7 +28,7 @@ npm run check
 npm pack
 ```
 
-Install the resulting archive from the Signal K configuration directory. To test the published beta instead, install `signalk-forecast-dataset-provider@beta`. Use Signal K 2.35.1 when testing delegated GRIB export with GRIB Processor.
+Install the resulting archive from the Signal K configuration directory. Use Signal K 2.35.1 when testing delegated GRIB export with GRIB Processor.
 
 The default storage location is `<plugin data directory>/catalogue`. An optional absolute `storageDirectory` can be configured. Use a local filesystem supporting hard links and atomic rename, with a single catalogue writer. Limits are configurable for asset bytes, dataset bytes, asset count and unfinished publications. They are per-publication limits, not an automatic total-disk-quota policy. Unfinished publications persist until resumed or explicitly aborted.
 
@@ -74,13 +76,13 @@ An independent trusted indexer can publish metadata plus an opaque index to `PUT
 
 Publication completeness and inventory verification are distinct. A radio-received file can be published with sparse metadata and remain downloadable before indexing. Strict coverage/field filters exclude unknown inventory rather than treating requested data as verified. Large indexes live on disk and are retrieved separately from catalogue summaries.
 
-## Expiration and GRIB export beta
+## Expiration and GRIB export
 
 A new dataset can declare an optional `expiresInSeconds`. The lifetime starts
 at commit. Expired datasets leave discovery and are removed after in-flight
 reads finish. The API reports their expiration as `expiresAt`.
 
-Install GRIB Processor alongside this beta to enable [delegated GRIB2
+Install GRIB Processor to enable [delegated GRIB2
 exports](docs/grib-export-alpha.md). The provider advertises supported selectors
 on eligible datasets and publishes each completed export as a normal catalogue
 dataset. Original assets remain available through their version-bound URLs.

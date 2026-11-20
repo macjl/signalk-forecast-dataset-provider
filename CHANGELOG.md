@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 — 2026-11-20
+
+- Add optional dataset expiration and delegated GRIB2 exports with configurable concurrency.
+- Enrich GRIB2 datasets with verified geographic coverage and forecast times when GRIB Processor is installed.
+- Recommend GRIB Processor in the Signal K App Store. The catalogue can run independently on Node.js 22 or later.
+
 ## 0.3.0-beta.4 — 2026-11-20
 
 - Run configurable parallel GRIB exports with two processing slots by default.
