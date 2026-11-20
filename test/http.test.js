@@ -102,6 +102,7 @@ async function fixture(t, configuration = {}) {
   }
   return {
     plugin,
+    scope: path.dirname(root),
     call,
     deltas,
     errors,
@@ -137,6 +138,33 @@ async function publication(f) {
   const record = await committed.json()
   return { p, record, asset: record.assets[0].href.slice(API_ROOT.length) }
 }
+
+test('local discovery lists the same complete, filterable resources as HTTP', async (t) => {
+  const f = await fixture(t)
+  const { record } = await publication(f)
+  const registry =
+    globalThis[Symbol.for('macjl.forecast-datasets.catalogues.v1')]
+  const service = registry.get(f.scope)
+  const filter = { format: 'grib2', kind: 'forecast', state: 'complete' }
+  const list = service.datasets(filter)
+  const response = await f.call(`/datasets?${new URLSearchParams(filter)}`, {
+    role: 'readonly'
+  })
+  assert.deepEqual(list, await response.json())
+  assert.deepEqual(service.datasets({ ...filter, offset: 1 }), {})
+  assert.deepEqual(service.datasets({ ...filter, format: 'zarr' }), {})
+  assert.deepEqual(service.dataset(record.id, record.version), record)
+  const chunks = []
+  for await (const part of service.readAsset(
+    record.id,
+    record.version,
+    'forecast',
+    new AbortController().signal
+  )) {
+    chunks.push(part)
+  }
+  assert.deepEqual(Buffer.concat(chunks), content)
+})
 
 test('external client publishes, discovers and downloads binary content without filesystem paths', async (t) => {
   const f = await fixture(t)

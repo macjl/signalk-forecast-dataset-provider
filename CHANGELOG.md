@@ -1,42 +1,27 @@
 # Changelog
 
+This changelog groups changes by stable release. See [GitHub Releases](https://github.com/macjl/signalk-forecast-dataset-provider/releases) for prerelease notes.
+
+## 0.4.0 — 2026-11-21
+
+- Add in-process publication, discovery and streaming of versioned assets for companion plugins running in the same Signal K instance.
+- GRIB Downloader and GRIB Weather Provider 0.8.0 can use the catalogue without a device access request. Notifications, retention and the existing HTTP API remain available to catalogue clients.
+
 ## 0.3.0 — 2026-11-20
 
-- Add optional dataset expiration and delegated GRIB2 exports with configurable concurrency.
-- Enrich GRIB2 datasets with verified geographic coverage and forecast times when GRIB Processor is installed.
-- Recommend GRIB Processor in the Signal K App Store. The catalogue can run independently on Node.js 22 or later.
-
-## 0.3.0-beta.4 — 2026-11-20
-
-- Run configurable parallel GRIB exports with two processing slots by default.
-  Give each result a distinguishable name and publish it through the catalogue.
-- Preserve verified geographic bounds and grid compatibility in the inventory.
-
-## 0.3.0-beta.3 — 2026-11-20
-
-- Automatically enrich GRIB2 inventories with verified validity times
-  through the companion processor, including current versions published
-  before upgrading.
-- Report actual forecast coverage and the regular step when present.
-  Preserve original assets, content versions and existing indexes.
-
-## 0.3.0-beta.2 — 2026-11-19
-
-- Accept inclusive UTC time ranges without requiring explicit fields or a fixed
-  forecast cadence when the processor supports them.
-- Allow field selectors on GRIB2 datasets without a published field list.
-  GRIB Processor checks requested parameters and levels against the source.
-- Document capability discovery and the export lifecycle with curl examples.
-
-## 0.3.0-beta.1 — 2026-11-19
-
-- Accept an optional dataset lifetime at publication and remove expired
-  datasets from discovery and storage while respecting active readers.
-- Delegate single-file GRIB2 exports and supported subsets to an installed
-  GRIB Processor. Advertise the selectors and limits per dataset.
-- Publish export results as catalogue datasets with source provenance and a
-  default lifetime of 20 minutes. Preserve version-bound asset downloads.
-- Publish on the npm `beta` channel. The resource contract remains 0.1.
+- **GRIB2 exports.** With GRIB Processor enabled, serve single-file GRIBs and
+  advertise supported area, field and forecast-time selections per dataset.
+  Time ranges use actual forecast validity times, including irregular steps.
+  Run two exports in parallel by default and publish their results as separate
+  datasets with source provenance and a default lifetime of 20 minutes.
+- **Verified inventories.** Measure validity times, geographic coverage and
+  grid compatibility with GRIB Processor, including for eligible datasets
+  already in the catalogue. Original assets, versions and indexes are preserved.
+- **Dataset expiration.** Producers can choose a lifetime at publication.
+  Expired datasets leave discovery and their storage is reclaimed after active
+  readers finish.
+- Recommend GRIB Processor in the Signal K App Store. The catalogue can run
+  independently on Node.js 22 or later. See the [export API examples](docs/grib-export-alpha.md).
 
 ## 0.2.0 — 2026-10-31
 
@@ -64,41 +49,16 @@
 
 ## 0.1.0 — 2026-10-30
 
-- First stable catalogue release, promoting the tested streaming publication,
-  immutable multi-asset storage, discovery, transport and progress-monitoring API.
+- First stable `forecastDatasets` catalogue. Stream multi-asset publications
+  with known or unknown sizes, measure size and SHA-256 on receipt, and show
+  live progress to writers. Completed assets can be reused after a restart.
+- Discover immutable datasets and download version-bound assets with HTTP
+  Range, HEAD and ETag support. Trusted indexers can add metadata and indexes
+  for verified coverage and field filters. Publish v2 resource notifications
+  and coordinate deletions with active readers.
+- Configure the per-asset and per-dataset size limits in MiB.
 - Update the Express 4 lockfile to body-parser 1.20.9, fixing GHSA-27r3-jxmh-p828.
 - Document the coordinated Downloader 0.4.0 / Weather Provider 0.7.0 upgrade,
   Node 24 requirement for the complete chain and separate access approvals.
 - Keep HTTP contract 0.1 and original dataset identities unchanged. No decoder,
   processor dispatch or subsetting service is bundled.
-
-## 0.1.0-beta.1 — 2026-10-21
-
-- First public beta of the format-agnostic `forecastDatasets` catalogue and original-content provider; experimental contract 0.1.
-- Include immutable multi-asset publication, unknown-size streaming, measured SHA-256/size, explicit commit, restart recovery and writer-only progress monitoring.
-- Include trusted index enrichment, filtered discovery, version-bound Range/HEAD/ETag downloads, v2 resource notifications and coordinated deletion.
-- Configure size limits in MiB. No bundled format decoder, subsetting processor or processor dispatch is advertised.
-- Publish with npm OIDC/provenance through GitHub Releases, under the `beta` dist-tag without changing `latest`.
-- Verify the same publication/transport tests on Windows, using a writable non-truncating handle for the durable file flush.
-
-## Development snapshots (not published to npm)
-
-### 0.1.2 — 2026-10-21
-
-- Configure size limits in MiB (`maxAssetMiB: 2048`, `maxDatasetMiB: 8192`), keeping internal/API byte accounting and the same default thresholds.
-- Clarify units in Plugin Config and validate fractional MiB values. No configuration migration or legacy aliases are provided for this unpublished prototype.
-
-### 0.1.1 — 2026-10-21
-
-- Accept unknown-size asset streams, measuring size and SHA-256 during reception while retaining expected-size/hash checks when supplied.
-- Enforce asset and cumulative publication byte limits while streaming, with completed-asset recovery and known-size reservations.
-- Add writer-only publication listing and volatile per-asset/total progress, keeping explicit commit and complete-only dataset discovery.
-- Preserve compatibility with contract 0.1 records and existing known-size clients.
-
-### 0.1.0 — 2026-10-21
-
-- Add the `forecastDatasets` Resource Provider and an experimental documented HTTP contract.
-- Add atomically committed multi-asset publications with immutable content hashes, restart recovery and asset-level resume.
-- Serve original bytes with Range, HEAD, ETags and version-bound URLs.
-- Add trusted inventory/index enrichment, strict verified-coverage/field discovery, v2 notifications and coordinated deletion.
-- Keep indexing/decoding and subset processors independent; no processing operations are advertised in this catalogue release.

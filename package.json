@@ -1,6 +1,6 @@
 {
   "name": "signalk-forecast-dataset-provider",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Signal K Resource Provider for immutable forecast datasets, original assets and verified inventories",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
