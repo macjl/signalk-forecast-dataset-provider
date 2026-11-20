@@ -456,10 +456,12 @@ export class Catalogue {
   async upload(
     id: string,
     assetId: string,
-    input: Readable | { preparedPath: string; signal: AbortSignal }
+    input: Readable | { preparedPath: string; signal: AbortSignal },
+    signal?: AbortSignal
   ): Promise<Asset> {
     return this.exclusive(`publication:${identifier(id)}`, async () => {
       this.ready()
+      signal?.throwIfAborted()
       identifier(assetId)
       const stage = this.stage(id)
       if (this.expired(stage.declaration.expiresAt))
@@ -543,7 +545,8 @@ export class Catalogue {
           await pipeline(
             input,
             check,
-            createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
+            createWriteStream(tmp, { flags: 'wx', mode: 0o600 }),
+            { signal }
           )
         }
         ensure(

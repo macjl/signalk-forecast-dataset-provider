@@ -179,7 +179,7 @@ export const openApi = {
   openapi: '3.0.3',
   info: {
     title: 'Forecast Dataset Provider',
-    version: '0.3.0',
+    version: '0.4.0',
     description:
       'Experimental contract 0.1. Original-content catalogue with optional delegated GRIB2 export.'
   },

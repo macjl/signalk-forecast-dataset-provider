@@ -49,6 +49,12 @@ Do not also configure the built-in Resources Provider to serve a custom `forecas
 
 ## Publish and retrieve
 
+A Downloader with local catalogue support can publish directly to this Provider
+when both plugins run in the same Signal K instance. It uses the same staged
+publication, validation and retention rules as HTTP clients.
+GRIB Weather Provider can also discover complete datasets and stream their
+versioned assets directly when it runs in the same instance.
+
 All custom paths below start at `/plugins/signalk-forecast-dataset-provider`. Authenticate with the same Signal K server token you use for other APIs. Producers need `readwrite` access; inventory assertions require an administrator/indexer with admin access. All writers share the publication namespace in v0.1; the producer label is descriptive, not a per-user ACL.
 
 1. `POST /publications` with the declared asset IDs and optional exact byte lengths/SHA-256 digests.

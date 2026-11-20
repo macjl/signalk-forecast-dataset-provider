@@ -15,12 +15,14 @@ import { PLUGIN_ID, RESOURCE_TYPE } from './types'
 import { openApi } from './openapi'
 import { Processing } from './processing'
 import { parseSettings, settingsSchema } from './settings'
+import { registerLocalCatalogue } from './local-catalogue'
 
 function createPlugin(app: ServerAPI): Plugin {
   let current: Catalogue | undefined
   let jobs: Processing | undefined
   let generation = 0
   let starting = Promise.resolve()
+  let unregisterLocalCatalogue: (() => void) | undefined
   const store = (): Catalogue => {
     if (!current)
       throw new ApiError(503, 'NOT_READY', 'Forecast catalogue is not running')
@@ -133,6 +135,11 @@ function createPlugin(app: ServerAPI): Plugin {
         app.setPluginStatus(
           `Providing ${RESOURCE_TYPE}: ${current.all().length} datasets`
         )
+        unregisterLocalCatalogue?.()
+        unregisterLocalCatalogue = registerLocalCatalogue(
+          path.dirname(dataDir),
+          candidate
+        )
       })().catch((error) => {
         if (attempt === generation) {
           current = undefined
@@ -144,6 +151,8 @@ function createPlugin(app: ServerAPI): Plugin {
     },
     async stop() {
       generation++
+      unregisterLocalCatalogue?.()
+      unregisterLocalCatalogue = undefined
       const active = current
       current = undefined
       const processing = jobs
