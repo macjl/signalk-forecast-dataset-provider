@@ -80,7 +80,7 @@ function createPlugin(app: ServerAPI): Plugin {
           (message) => app.error(message)
         )
         await candidate.init()
-        await processing.init()
+        await processing.init(candidate)
         if (attempt !== generation) {
           await processing.close()
           await candidate.close()

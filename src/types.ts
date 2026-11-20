@@ -18,7 +18,12 @@ export interface Metadata {
   model?: string
   run?: string
   bounds?: Bounds
-  forecast?: { from: string; to: string }
+  forecast?: {
+    from: string
+    to: string
+    times?: string[]
+    stepSeconds?: number
+  }
   fields?: Field[]
   grid?: JsonObject
 }

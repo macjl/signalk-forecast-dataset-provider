@@ -167,6 +167,21 @@ A missing If-Match returns 428; a stale metadata revision returns 412. Enrichmen
 
 `GET /datasets/{id}/versions/{version}/index` returns the exact source version, metadata revision, asset IDs/sizes/hashes, verified metadata and supplied index. Without enrichment it returns 404. Malformed/failed enrichment leaves existing metadata and original content usable. Complete publication and verified inventory are independent.
 
+With a compatible GRIB Processor installed, the provider analyzes eligible
+GRIB2 versions in the background. It handles new publications and gradually
+catches up the current version of existing datasets, newest first. It preserves
+any existing index and updates the inventory on the same content version.
+Failures are retried after a delay. Short-lived exports keep their existing
+result metadata.
+
+The verified `forecast.times` field lists the distinct UTC validity times of
+messages in ascending order. Its first and last values are `forecast.from`
+and `forecast.to`. `forecast.stepSeconds` is present when the list has at
+least two evenly spaced times. The list describes the union of available
+times across fields. The full list is available on version detail and in the
+inventory. Catalogue summaries contain only the bounds and, when available,
+the regular step.
+
 ## Notifications, deletion and lifecycle
 
 Custom publication, enrichment of the current head and deletion emit deltas at `resources.forecastDatasets.<id>` with target version `v2`. Delete uses `null`. The provider does not populate the v1 full model. Clients must still perform an initial listing and resynchronise after reconnecting; notifications are not a durable event log.

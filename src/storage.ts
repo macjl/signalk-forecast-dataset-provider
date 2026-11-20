@@ -800,6 +800,17 @@ export class Catalogue {
         href: `${prefix}/assets/${a.id}`,
         byteRanges: true
       }))
+    } else {
+      const forecast =
+        record.inventory?.metadata.forecast ?? record.metadata.forecast
+      if (forecast?.times) {
+        const { from, to, stepSeconds } = forecast
+        result.forecast = {
+          from,
+          to,
+          ...(stepSeconds !== undefined ? { stepSeconds } : {})
+        }
+      }
     }
     return result
   }

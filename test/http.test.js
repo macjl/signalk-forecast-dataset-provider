@@ -460,6 +460,72 @@ test('byte range parser handles large suffixes and rejects unsafe integers', () 
   )
 })
 
+test('automatically enriches an existing GRIB version and preserves its prior inventory', async (t) => {
+  const f = await fixture(t)
+  const { record, asset } = await publication(f)
+  const versionPath = `/datasets/${record.id}/versions/${record.version}`
+  const initial = await f.call(versionPath)
+  const index = {
+    messages: [{ assetId: 'forecast', offset: 0, length: content.length }]
+  }
+  const enriched = await f.call(versionPath + '/inventory', {
+    method: 'PUT',
+    headers: { 'If-Match': initial.headers.get('etag') },
+    json: { metadata: { model: 'existing-index' }, index }
+  })
+  assert.equal(enriched.status, 200)
+  const before = await f.call(asset)
+  const registry = (globalThis[
+    Symbol.for('macjl.forecast-datasets.processors.v1')
+  ] ??= new Map())
+  let calls = 0
+  const times = [
+    '2026-11-19T06:00:00Z',
+    '2026-11-19T07:30:00Z',
+    '2026-11-19T09:00:00Z'
+  ]
+  registry.set(os.tmpdir(), {
+    id: 'test-processor',
+    capabilities: () => [],
+    async analyze({ paths }) {
+      calls++
+      assert.deepEqual(await fs.readFile(paths[0]), content)
+      return { run: times[0], forecastTimes: times }
+    }
+  })
+  t.after(() => registry.delete(os.tmpdir()))
+  const deadline = Date.now() + 12_000
+  let detail
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    detail = await (await f.call(versionPath, { role: 'readonly' })).json()
+  } while (!detail.forecast?.times && Date.now() < deadline)
+  assert.deepEqual(detail.forecast, {
+    from: '2026-11-19T06:00:00.000Z',
+    to: '2026-11-19T09:00:00.000Z',
+    times: times.map((time) => new Date(time).toISOString()),
+    stepSeconds: 5400
+  })
+  assert.equal(detail.version, record.version)
+  assert.equal(detail.metadataRevision, 3)
+  assert.equal(detail.model, 'existing-index')
+  const inventory = await (await f.call(versionPath + '/index')).json()
+  assert.deepEqual(inventory.index, index)
+  const summary = (await f.provider.methods.listResources({}))[record.id]
+  assert.equal(summary.forecast.stepSeconds, 5400)
+  assert.equal(summary.forecast.times, undefined)
+  assert.equal(
+    (await f.call(asset)).headers.get('etag'),
+    before.headers.get('etag')
+  )
+  assert.ok(
+    f.deltas.some(
+      ([, delta]) => delta.updates[0].values[0].value?.metadataRevision === 3
+    )
+  )
+  assert.equal(calls, 1)
+})
+
 test('optional processor exports an immutable version for the requesting identity', async (t) => {
   const f = await fixture(t)
   const { record } = await publication(f)

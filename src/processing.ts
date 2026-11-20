@@ -48,6 +48,10 @@ interface Processor {
     maxBytes: number
     signal: AbortSignal
   }): Promise<ActualSelection>
+  analyze?(input: { paths: string[]; signal: AbortSignal }): Promise<{
+    run?: string
+    forecastTimes: string[]
+  }>
 }
 interface Result {
   dataset: Version
@@ -186,6 +190,8 @@ export class Processing {
   private readonly jobs = new Map<string, Job>()
   private readonly tasks = new Set<Promise<void>>()
   private timer?: NodeJS.Timeout
+  private analysisTask?: Promise<void>
+  private readonly analysisRetry = new Map<string, number>()
 
   constructor(
     private readonly scope: string,
@@ -193,11 +199,96 @@ export class Processing {
     private readonly log: (message: string) => void
   ) {}
 
-  async init() {
+  async init(catalogue: Catalogue) {
     await fs.rm(this.directory, { recursive: true, force: true })
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 })
-    this.timer = setInterval(() => this.sweep(), 30_000)
+    const tick = () => {
+      this.sweep()
+      this.scheduleAnalysis(catalogue)
+    }
+    this.timer = setInterval(tick, 5_000)
     this.timer.unref()
+    tick()
+  }
+
+  private scheduleAnalysis(catalogue: Catalogue) {
+    const processor = this.processor
+    if (
+      !processor?.analyze ||
+      this.analysisTask ||
+      this.tasks.size ||
+      this.controller.signal.aborted
+    )
+      return
+    const candidates = catalogue.all().filter(
+      (record) =>
+        record.format === 'grib2' &&
+        record.kind !== 'harmonic' &&
+        !record.inventory?.metadata.forecast?.times?.length &&
+        // Short-lived exports are delivered directly to the requesting client.
+        !(record.expiresAt && record.producer === processor.id)
+    )
+    const key = (record: Version) => record.id + ':' + record.version
+    const current = new Set(candidates.map(key))
+    for (const prior of this.analysisRetry.keys())
+      if (!current.has(prior)) this.analysisRetry.delete(prior)
+    const now = Date.now()
+    const record = candidates
+      .filter((item) => (this.analysisRetry.get(key(item)) ?? 0) <= now)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    if (!record) return
+    this.analysisTask = this.analyze(
+      catalogue,
+      record,
+      processor.analyze.bind(processor)
+    )
+      .catch((error) => {
+        if (this.controller.signal.aborted) return
+        this.analysisRetry.set(key(record), Date.now() + 5 * 60_000)
+        if (!(
+          error instanceof ApiError && [404, 409, 412].includes(error.status)
+        ))
+          this.log(
+            `Could not analyze GRIB2 dataset ${record.id}: ${String(error.message ?? error)}`
+          )
+      })
+      .finally(() => {
+        this.analysisTask = undefined
+        this.scheduleAnalysis(catalogue)
+      })
+  }
+
+  private async analyze(
+    catalogue: Catalogue,
+    record: Version,
+    analyze: NonNullable<Processor['analyze']>
+  ) {
+    const inputs = catalogue.processingInputs(record.id, record.version)
+    try {
+      const existing = record.inventory
+        ? (await catalogue.readInventory(record.id, record.version)).inventory
+        : { metadata: {}, index: {} }
+      const { run, forecastTimes: times } = await analyze({
+        paths: inputs.paths,
+        signal: this.controller.signal
+      })
+      this.controller.signal.throwIfAborted()
+      await catalogue.enrich(
+        record.id,
+        record.version,
+        {
+          metadata: {
+            ...existing.metadata,
+            ...(run ? { run } : {}),
+            forecast: { from: times[0], to: times.at(-1), times }
+          },
+          index: existing.index
+        },
+        record.metadataRevision
+      )
+    } finally {
+      inputs.release()
+    }
   }
 
   private get processor(): Processor | undefined {
@@ -381,7 +472,10 @@ export class Processing {
           ? { from: times[0], to: times[times.length - 1] }
           : job.selection.from
             ? undefined
-            : sourceMetadata.forecast
+            : sourceMetadata.forecast && {
+                from: sourceMetadata.forecast.from,
+                to: sourceMetadata.forecast.to
+              }
       }
       // Use the public publication rules, quotas and notification path.
       const stage = await catalogue.begin({
@@ -455,6 +549,7 @@ export class Processing {
   async close() {
     clearInterval(this.timer)
     this.controller.abort()
+    await this.analysisTask
     await Promise.all(this.tasks)
     await fs.rm(this.directory, { recursive: true, force: true })
   }

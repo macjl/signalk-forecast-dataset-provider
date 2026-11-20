@@ -146,7 +146,7 @@ export function fields(value: unknown): Field[] {
     return field
   })
 }
-export function metadata(value: unknown): Metadata {
+export function metadata(value: unknown, verified = false): Metadata {
   const input = object(value, 'metadata')
   keys(
     input,
@@ -170,11 +170,40 @@ export function metadata(value: unknown): Metadata {
   if (input.bounds !== undefined) out.bounds = bounds(input.bounds)
   if (input.forecast !== undefined) {
     const f = object(input.forecast, 'forecast')
-    keys(f, ['from', 'to'], 'forecast')
+    keys(
+      f,
+      verified ? ['from', 'to', 'times', 'stepSeconds'] : ['from', 'to'],
+      'forecast'
+    )
     out.forecast = { from: date(f.from, 'from'), to: date(f.to, 'to') }
     ensure(
       out.forecast.from <= out.forecast.to,
       'forecast.from must not follow forecast.to'
+    )
+    if (f.times !== undefined) {
+      ensure(
+        Array.isArray(f.times) && f.times.length > 0 && f.times.length <= 10000,
+        'forecast.times must contain 1 to 10000 timestamps'
+      )
+      const times = f.times.map((time) => date(time, 'forecast.times'))
+      ensure(
+        times[0] === out.forecast.from &&
+          times.at(-1) === out.forecast.to &&
+          times.every((time, index) => index === 0 || time > times[index - 1]!),
+        'forecast.times must be strictly ascending from forecast.from to forecast.to'
+      )
+      const timestamps = times.map(Date.parse)
+      const step = timestamps.length > 1 ? timestamps[1]! - timestamps[0]! : 0
+      out.forecast.times = times
+      if (
+        step &&
+        timestamps.slice(1).every((time, i) => time - timestamps[i]! === step)
+      )
+        out.forecast.stepSeconds = step / 1000
+    }
+    ensure(
+      f.stepSeconds === undefined || f.stepSeconds === out.forecast.stepSeconds,
+      'forecast.stepSeconds must match the listed forecast times'
     )
   }
   if (input.fields !== undefined) out.fields = fields(input.fields)
@@ -285,7 +314,7 @@ export function inventory(value: unknown): Inventory {
   const input = object(value, 'inventory')
   keys(input, ['metadata', 'index'], 'inventory')
   return {
-    metadata: metadata(input.metadata),
+    metadata: metadata(input.metadata, true),
     index: jsonObject(input.index, 'index')
   }
 }
