@@ -1,4 +1,4 @@
-# GRIB export API, beta
+# GRIB export API
 
 Enable the companion GRIB Processor plugin to expose the export capability on
 compatible forecast datasets. Forecast Dataset Provider receives the request,
