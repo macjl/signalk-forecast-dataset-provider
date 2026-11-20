@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0-beta.4 — 2026-11-20
+
+- Run configurable parallel GRIB exports with two processing slots by default.
+  Give each result a distinguishable name and publish it through the catalogue.
+- Preserve verified geographic bounds and grid compatibility in the inventory.
+
 ## 0.3.0-beta.3 — 2026-11-20
 
 - Automatically enrich GRIB2 inventories with verified validity times

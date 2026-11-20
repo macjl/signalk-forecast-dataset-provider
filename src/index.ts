@@ -35,7 +35,11 @@ function createPlugin(app: ServerAPI): Plugin {
     start(settings) {
       const attempt = ++generation
       starting = (async () => {
-        const { limits, configuration: input } = parseSettings(settings)
+        const {
+          limits,
+          configuration: input,
+          maxConcurrentExports
+        } = parseSettings(settings)
         const root = input.storageDirectory
           ? path.resolve(input.storageDirectory as string)
           : path.join(app.getDataDirPath(), 'catalogue')
@@ -43,6 +47,7 @@ function createPlugin(app: ServerAPI): Plugin {
         const processing = new Processing(
           path.dirname(dataDir),
           path.join(root, 'processing-work'),
+          maxConcurrentExports,
           (message) => app.error(message)
         )
         const candidate = new Catalogue(

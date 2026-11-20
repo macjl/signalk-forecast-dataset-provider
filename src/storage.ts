@@ -782,6 +782,11 @@ export class Catalogue {
       metadataRevision: record.metadataRevision,
       ...record.metadata,
       ...record.inventory?.metadata,
+      ...(record.inventory?.metadata.grid
+        ? {
+            grid: { ...record.metadata.grid, ...record.inventory.metadata.grid }
+          }
+        : {}),
       inventory: {
         status: record.inventory ? 'verified' : 'unverified',
         ...(record.inventory ? { href: `${prefix}/index` } : {})

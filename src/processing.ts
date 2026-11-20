@@ -3,7 +3,13 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { canonical, type Catalogue } from './storage'
-import { API_ROOT, type Bounds, type Field, type Version } from './types'
+import {
+  API_ROOT,
+  type Bounds,
+  type Field,
+  type Metadata,
+  type Version
+} from './types'
 import {
   ApiError,
   bounds,
@@ -29,11 +35,16 @@ type Capability = {
   operation: 'export'
   output: { format: 'grib2'; layout: 'single-file' }
   selectors: string[]
+  pendingSelectors?: string[]
   fields?: Field[]
   forecastInterval?: { stepSeconds: number; maxHours: number }
 }
 // Older providers require a list of fields and a fixed forecast grid.
-const supportedSelectors = { timeRanges: true, unlistedFields: true } as const
+const supportedSelectors = {
+  timeRanges: true,
+  unlistedFields: true,
+  verifiedGrid: true
+} as const
 interface Processor {
   id: string
   version: string
@@ -48,9 +59,12 @@ interface Processor {
     maxBytes: number
     signal: AbortSignal
   }): Promise<ActualSelection>
+  needsAnalysis?(record: Version): boolean
   analyze?(input: { paths: string[]; signal: AbortSignal }): Promise<{
     run?: string
-    forecastTimes: string[]
+    forecastTimes?: string[]
+    bounds?: Bounds
+    grid?: Metadata['grid']
   }>
 }
 interface Result {
@@ -196,6 +210,7 @@ export class Processing {
   constructor(
     private readonly scope: string,
     private readonly directory: string,
+    private readonly maxConcurrentExports: number,
     private readonly log: (message: string) => void
   ) {}
 
@@ -216,7 +231,7 @@ export class Processing {
     if (
       !processor?.analyze ||
       this.analysisTask ||
-      this.tasks.size ||
+      this.tasks.size >= this.maxConcurrentExports ||
       this.controller.signal.aborted
     )
       return
@@ -224,7 +239,8 @@ export class Processing {
       (record) =>
         record.format === 'grib2' &&
         record.kind !== 'harmonic' &&
-        !record.inventory?.metadata.forecast?.times?.length &&
+        (processor.needsAnalysis?.(record) ??
+          !record.inventory?.metadata.forecast?.times?.length) &&
         // Short-lived exports are delivered directly to the requesting client.
         !(record.expiresAt && record.producer === processor.id)
     )
@@ -268,7 +284,12 @@ export class Processing {
       const existing = record.inventory
         ? (await catalogue.readInventory(record.id, record.version)).inventory
         : { metadata: {}, index: {} }
-      const { run, forecastTimes: times } = await analyze({
+      const {
+        run,
+        forecastTimes: times,
+        bounds,
+        grid
+      } = await analyze({
         paths: inputs.paths,
         signal: this.controller.signal
       })
@@ -280,7 +301,11 @@ export class Processing {
           metadata: {
             ...existing.metadata,
             ...(run ? { run } : {}),
-            forecast: { from: times[0], to: times.at(-1), times }
+            ...(bounds ? { bounds } : {}),
+            ...(grid ? { grid: { ...existing.metadata.grid, ...grid } } : {}),
+            ...(times?.length
+              ? { forecast: { from: times[0], to: times.at(-1), times } }
+              : {})
           },
           index: existing.index
         },
@@ -402,11 +427,20 @@ export class Processing {
         this.jobs.delete(previous.id)
       }
     }
-    if (this.tasks.size)
-      throw new ApiError(429, 'PROCESSING_BUSY', 'An export is already running')
+    if (
+      this.tasks.size + Number(Boolean(this.analysisTask)) >=
+      this.maxConcurrentExports
+    )
+      throw new ApiError(
+        429,
+        'PROCESSING_BUSY',
+        'All forecast processing slots are occupied'
+      )
     if (this.jobs.size >= 128) {
-      const oldest = this.jobs.keys().next().value
-      if (oldest) this.jobs.delete(oldest)
+      const finished = [...this.jobs.values()].find(
+        (job) => job.state !== 'running'
+      )
+      if (finished) this.jobs.delete(finished.id)
     }
     const inputs = catalogue.processingInputs(id, version)
     const jobId = randomUUID()
@@ -424,7 +458,9 @@ export class Processing {
     }
     this.jobs.set(jobId, job)
     const task = this.run(job, processor, catalogue, record, inputs).finally(
-      () => this.tasks.delete(task)
+      () => {
+        this.tasks.delete(task)
+      }
     )
     this.tasks.add(task)
     return job
@@ -459,11 +495,17 @@ export class Processing {
         ...record.inventory?.metadata
       }
       const times = actual.forecastTimes
+      const areaLabel = job.selection.bbox
+        ? ` · ${job.selection.bbox.map((coordinate) => Number(coordinate.toFixed(4))).join(', ')}`
+        : ''
+      const timeLabel = job.selection.to ? ` · to ${job.selection.to}` : ''
+      const suffix = ` · export${areaLabel}${timeLabel} · ${job.id.slice(0, 8)}`
       const metadata = {
-        name: `${sourceMetadata.name ?? sourceMetadata.model ?? 'Forecast'} export`.slice(
-          0,
-          512
-        ),
+        name:
+          (sourceMetadata.name ?? sourceMetadata.model ?? 'Forecast').slice(
+            0,
+            512 - suffix.length
+          ) + suffix,
         model: sourceMetadata.model,
         run: sourceMetadata.run,
         bounds: job.selection.bbox ? actual.bounds : sourceMetadata.bounds,
