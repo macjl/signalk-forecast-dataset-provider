@@ -3,6 +3,7 @@ import { DEFAULT_LIMITS, type Limits } from './types'
 import { ensure, object } from './validation'
 
 export const BYTES_PER_MIB = 1024 ** 2
+const defaultConcurrentExports = 2
 const sizeOptions = [
   ['maxAssetMiB', 'maxAssetBytes'],
   ['maxDatasetMiB', 'maxDatasetBytes']
@@ -11,6 +12,7 @@ const sizeOptions = [
 export function parseSettings(value: unknown): {
   limits: Limits
   configuration: Record<string, unknown>
+  maxConcurrentExports: number
 } {
   const input = object(value, 'settings')
   const limits = { ...DEFAULT_LIMITS }
@@ -43,7 +45,17 @@ export function parseSettings(value: unknown): {
       typeof input.storageDirectory === 'string',
     'Invalid storageDirectory'
   )
-  return { limits, configuration: input }
+  const maxConcurrentExports =
+    input.maxConcurrentExports === undefined
+      ? defaultConcurrentExports
+      : input.maxConcurrentExports
+  ensure(
+    typeof maxConcurrentExports === 'number' &&
+      Number.isSafeInteger(maxConcurrentExports) &&
+      maxConcurrentExports > 0,
+    'Invalid maxConcurrentExports'
+  )
+  return { limits, configuration: input, maxConcurrentExports }
 }
 
 export function settingsSchema(): object {
@@ -86,6 +98,14 @@ export function settingsSchema(): object {
         title: 'Maximum unfinished publications',
         minimum: 1,
         default: DEFAULT_LIMITS.maxStaging
+      },
+      maxConcurrentExports: {
+        type: 'integer',
+        title: 'Maximum concurrent forecast exports',
+        description:
+          'Each export uses a separate process. Background analysis can use one free slot.',
+        minimum: 1,
+        default: defaultConcurrentExports
       }
     }
   }

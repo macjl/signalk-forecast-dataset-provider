@@ -15,6 +15,12 @@ test('size settings expose 2048/8192 MiB without changing internal default limit
   assert.equal(schema.maxAssetBytes, undefined)
   assert.equal(schema.maxDatasetBytes, undefined)
   assert.deepEqual(parseSettings({}).limits, DEFAULT_LIMITS)
+  assert.equal(schema.maxConcurrentExports.default, 2)
+  assert.equal(parseSettings({}).maxConcurrentExports, 2)
+  assert.equal(
+    parseSettings({ maxConcurrentExports: 6 }).maxConcurrentExports,
+    6
+  )
   const { limits } = parseSettings({
     maxAssetMiB: 3,
     maxDatasetMiB: 12,
@@ -52,4 +58,8 @@ test('invalid MiB values and noninteger counts fail without unsafe byte limits',
   )
   assert.throws(() => parseSettings({ maxAssets: 1.5 }), /Invalid maxAssets/)
   assert.throws(() => parseSettings({ maxStaging: 0 }), /Invalid maxStaging/)
+  assert.throws(
+    () => parseSettings({ maxConcurrentExports: 2.5 }),
+    /Invalid maxConcurrentExports/
+  )
 })

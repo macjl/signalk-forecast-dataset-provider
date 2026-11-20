@@ -93,7 +93,7 @@ On startup published assets are checked for existence, regular-file type and byt
 
 ## Discovery and detail
 
-`GET /signalk/v2/api/resources/forecastDatasets` returns a map keyed by dataset ID. Each value summarises the latest complete version and contains identity, revision, provenance-free descriptive metadata, inventory state, total size, asset count, an empty operations list, and the detail `href`. Assets and index messages are omitted from summaries. The plugin also exposes `/datasets` with the same listing semantics and explicit HTTP error responses.
+`GET /signalk/v2/api/resources/forecastDatasets` returns a map keyed by dataset ID. Each value summarises the latest complete version and contains identity, revision, provenance-free descriptive metadata, inventory state, total size, asset count, available processing operations, and the detail `href`. Assets and index messages are omitted from summaries. The plugin also exposes `/datasets` with the same listing semantics and explicit HTTP error responses.
 
 `GET /signalk/v2/api/resources/forecastDatasets/{id}` or plugin `/datasets/{id}` returns detail. It adds `declared` metadata, any explicitly published `requested`/`provenance` objects and `assets[]` with stable version-bound `href`, byte size, hash, media type and `byteRanges: true`. Top-level descriptive fields merge declared metadata with supplied verified metadata. They are a convenience view: an inventory flag is not proof that every declared field was verified; the linked inventory identifies the actual verified keys.
 

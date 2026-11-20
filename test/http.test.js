@@ -471,7 +471,10 @@ test('automatically enriches an existing GRIB version and preserves its prior in
   const enriched = await f.call(versionPath + '/inventory', {
     method: 'PUT',
     headers: { 'If-Match': initial.headers.get('etag') },
-    json: { metadata: { model: 'existing-index' }, index }
+    json: {
+      metadata: { model: 'existing-index', grid: { resolution: '0025' } },
+      index
+    }
   })
   assert.equal(enriched.status, 200)
   const before = await f.call(asset)
@@ -490,7 +493,12 @@ test('automatically enriches an existing GRIB version and preserves its prior in
     async analyze({ paths }) {
       calls++
       assert.deepEqual(await fs.readFile(paths[0]), content)
-      return { run: times[0], forecastTimes: times }
+      return {
+        run: times[0],
+        forecastTimes: times,
+        bounds: [-6, 45, -5.9, 45.1],
+        grid: { bboxCrop: true }
+      }
     }
   })
   t.after(() => registry.delete(os.tmpdir()))
@@ -509,6 +517,8 @@ test('automatically enriches an existing GRIB version and preserves its prior in
   assert.equal(detail.version, record.version)
   assert.equal(detail.metadataRevision, 3)
   assert.equal(detail.model, 'existing-index')
+  assert.deepEqual(detail.bounds, [-6, 45, -5.9, 45.1])
+  assert.deepEqual(detail.grid, { resolution: '0025', bboxCrop: true })
   const inventory = await (await f.call(versionPath + '/index')).json()
   assert.deepEqual(inventory.index, index)
   const summary = (await f.provider.methods.listResources({}))[record.id]
@@ -524,6 +534,84 @@ test('automatically enriches an existing GRIB version and preserves its prior in
     )
   )
   assert.equal(calls, 1)
+})
+
+test('leases the same original to several exports and returns Retry-After at the configured limit', async (t) => {
+  const f = await fixture(t, { maxConcurrentExports: 3 })
+  const { record } = await publication(f)
+  const route = `/datasets/${record.id}/versions/${record.version}/requests`
+  const registry = (globalThis[
+    Symbol.for('macjl.forecast-datasets.processors.v1')
+  ] ??= new Map())
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const workerOutputs = new Set()
+  registry.set(os.tmpdir(), {
+    id: 'test-processor',
+    version: '1',
+    capabilities: () => [
+      {
+        operation: 'export',
+        output: { format: 'grib2', layout: 'single-file' },
+        selectors: ['bbox']
+      }
+    ],
+    async run({ selection, paths, output }) {
+      workerOutputs.add(output)
+      await gate
+      await fs.copyFile(paths[0], output)
+      return { messageCount: 1, bounds: selection.bbox }
+    }
+  })
+  t.after(() => registry.delete(os.tmpdir()))
+  const ask = (index) =>
+    f.call(route, {
+      role: 'readwrite',
+      method: 'POST',
+      headers: { 'X-Test-User': `boat-${index}` },
+      json: { selection: { bbox: [index, 40, index + 1, 41] } }
+    })
+  let jobs
+  try {
+    const accepted = await Promise.all([0, 1, 2].map(ask))
+    assert.deepEqual(
+      accepted.map((res) => res.status),
+      [202, 202, 202]
+    )
+    jobs = await Promise.all(accepted.map((res) => res.json()))
+    assert.equal(new Set(jobs.map((job) => job.id)).size, 3)
+    assert.equal(workerOutputs.size, 3)
+    const excess = await ask(3)
+    assert.equal(excess.status, 429)
+    assert.equal(excess.headers.get('retry-after'), '1')
+    assert.equal((await excess.json()).code, 'PROCESSING_BUSY')
+  } finally {
+    release()
+  }
+  const results = await Promise.all(
+    jobs.map(async (job, index) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const res = await f.call(job.href.slice(API_ROOT.length), {
+          role: 'readwrite',
+          headers: { 'X-Test-User': `boat-${index}` }
+        })
+        const updated = await res.json()
+        if (updated.state === 'complete') return updated.result
+        assert.equal(updated.state, 'running', updated.error)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      assert.fail('Concurrent export did not finish')
+    })
+  )
+  assert.equal(new Set(results.map((result) => result.id)).size, 3)
+  assert.equal(new Set(results.map((result) => result.name)).size, 3)
+  assert.ok(
+    results.every(
+      (result) => result.provenance.source.version === record.version
+    )
+  )
 })
 
 test('optional processor exports an immutable version for the requesting identity', async (t) => {
@@ -543,7 +631,11 @@ test('optional processor exports an immutable version for the requesting identit
     id: 'test-processor',
     version: '1',
     capabilities: (_record, support) => {
-      assert.deepEqual(support, { timeRanges: true, unlistedFields: true })
+      assert.deepEqual(support, {
+        timeRanges: true,
+        unlistedFields: true,
+        verifiedGrid: true
+      })
       return [{ ...json, selectors: ['from', 'to', 'fields'] }]
     },
     async run({ selection, paths, output }) {

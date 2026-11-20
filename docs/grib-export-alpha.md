@@ -45,10 +45,12 @@ it advertises `fields` without a list, send an ecCodes short name and optional
 GRIB level. Each requested field must match at least one message in the
 result. A selection that matches no message fails.
 
-The `bbox` selector crops compatible regular latitude-longitude grids. If
-the catalogue has no grid metadata, compatibility is checked against the
-original GRIB messages when the job runs. The result reports the exact
-envelope of retained grid points. Discovery filters on the catalogue, such as
+The `bbox` selector crops compatible regular latitude-longitude grids. The
+automatic inventory supplies the grid bounds and indicates whether the dataset
+supports this selector. `pendingSelectors: ["bbox"]` means this check is
+pending. Clients can intersect their map bounds with the dataset bounds before
+requesting a crop. The result reports the exact envelope of retained grid points.
+Discovery filters on the catalogue, such as
 `GET /datasets?from=…&to=…`, still use verified inventory coverage.
 
 The result includes source and processor provenance, size and SHA-256.
@@ -64,8 +66,10 @@ can reuse an existing job or an accessible result. Authorised catalogue
 readers can discover and use the derived dataset. While the job is still
 available, its status is `expired` if the result has already left the catalogue.
 
-The beta runs one export at a time. Input and output are each limited
-to 1 GiB. The worker writes in the catalogue filesystem. The provider moves the finished
+The provider runs up to `maxConcurrentExports` processing workers, two by default.
+Background analysis can use one free slot. Each export has its own file and
+catalogue result. Input and output per export are each limited to 1 GiB.
+The worker writes in the catalogue filesystem. The provider moves the finished
 file into staging, reads it once to compute the checksum and commits it
 through the same publication path as an upload.
 The same endpoint can serve remote acquisition, local route calculations and
