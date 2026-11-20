@@ -379,7 +379,32 @@ export const openApi = {
         requestBody: jsonBody({
           type: 'object',
           required: ['metadata', 'index'],
-          properties: { metadata, index: { type: 'object' } }
+          properties: {
+            metadata: {
+              ...metadata,
+              properties: {
+                ...metadata.properties,
+                forecast: {
+                  ...metadata.properties.forecast,
+                  properties: {
+                    ...metadata.properties.forecast.properties,
+                    times: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 10000,
+                      items: { type: 'string', format: 'date-time' }
+                    },
+                    stepSeconds: {
+                      type: 'number',
+                      minimum: 0,
+                      exclusiveMinimum: true
+                    }
+                  }
+                }
+              }
+            },
+            index: { type: 'object' }
+          }
         }),
         responses: {
           '200': ok,

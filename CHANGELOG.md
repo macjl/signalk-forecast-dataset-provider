@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0-beta.3 — 2026-11-20
+
+- Automatically enrich GRIB2 inventories with verified validity times
+  through the companion processor, including current versions published
+  before upgrading.
+- Report actual forecast coverage and the regular step when present.
+  Preserve original assets, content versions and existing indexes.
+
 ## 0.3.0-beta.2 — 2026-11-19
 
 - Accept inclusive UTC time ranges without requiring explicit fields or a fixed
